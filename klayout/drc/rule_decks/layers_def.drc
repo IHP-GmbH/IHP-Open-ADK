@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# ADK-owned abstract layers.
+#
+# Layer numbers come from the ADK layer registry (config/layers.json),
+# loaded by adk_assembly.drc and passed into this eval as the `adk_layers`
+# hash. Tools outside the ADK that need to know which fabrication layer
+# `exchange0` maps to MUST read the same JSON registry (see
+# chiplet_kicad_plugin/hyp_to_gds.py for the canonical consumer).
+
+exchange0_layer = adk_layers['exchange0']
+exchange1_layer = adk_layers['exchange1']
+
+exchange0_drw = polygons(exchange0_layer['gds_layer'], exchange0_layer['gds_datatype'])
+exchange1_drw = polygons(exchange1_layer['gds_layer'], exchange1_layer['gds_datatype'])

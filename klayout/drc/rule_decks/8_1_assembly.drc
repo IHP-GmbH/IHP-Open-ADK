@@ -1,0 +1,42 @@
+# frozen_string_literal: true
+# SPDX-License-Identifier: Apache-2.0
+#
+# ADK assembly-level DRC rules.
+#
+# Chiplet placement constraints expressed over abstract inputs declared by
+# the active interposer adapter. Interposer-agnostic: no PDK-specific layer
+# numbers appear in this file. See docs/adapter_contract.md for the required
+# inputs.
+#
+# Adapted from interposer/.../8_1_assembly.drc (IHP PDK Authors, 2025) and
+# generalised to abstract inputs.
+
+logger.info('ADK: starting assembly DRC checks')
+
+# Rule ASM.a -- chiplet boundaries must not overlap.
+logger.info('ADK: ASM.a')
+asm_a = exchange0_drw.merged(2)
+asm_a.output('ASM.a', 'ASM.a : Chiplet boundaries must not overlap')
+asm_a.forget
+
+# Rule ASM.b -- minimum chiplet-to-chiplet spacing.
+logger.info('ADK: ASM.b')
+asm_b_value = drc_rules['ASM_b'].to_f
+asm_b = exchange0_drw.space(asm_b_value.um, euclidian)
+asm_b.output('ASM.b', "ASM.b : Min. chiplet-to-chiplet spacing is #{asm_b_value} um")
+asm_b.forget
+
+# Rule ASM.e -- minimum chiplet area (degenerate-polygon sanity check).
+logger.info('ADK: ASM.e')
+asm_e_value = drc_rules['ASM_e'].to_f
+asm_e = exchange0_drw.with_area(nil, asm_e_value.um2)
+asm_e.output('ASM.e', "ASM.e : Min. chiplet area is #{asm_e_value} um2")
+asm_e.forget
+
+# Rule ASM.f -- chiplet-attachment geometry interacting with a chiplet
+# boundary must be fully inside it. Attachment geometry that lies wholly
+# outside any chiplet (e.g. on the interposer itself) is allowed.
+logger.info('ADK: ASM.f')
+asm_f = chiplet_attachment_input.interacting(exchange0_drw).not_inside(exchange0_drw)
+asm_f.output('ASM.f', 'ASM.f : Chiplet-attachment geometry interacting with a chiplet must be fully inside it')
+asm_f.forget

@@ -1,0 +1,103 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# ADK assembly DRC -- top-level wrapper.
+#
+# Interposer-agnostic. The active interposer adapter is selected at runtime
+# via the $adapter KLayout variable (-rd adapter=<path>), typically set by
+# the Python runner from --interposer-adapter <name>. The wrapper validates
+# that the adapter declares every required abstract input before the rule
+# deck is evaluated. See docs/adapter_contract.md.
+
+require 'json'
+require 'logger'
+
+#------------------------------------------------------------------------------
+# Logger
+#------------------------------------------------------------------------------
+logger = Logger.new($stdout)
+logger.formatter = proc do |_severity, datetime, _progname, msg|
+  "#{datetime}: #{msg}\n"
+end
+$stdout.sync = true
+
+#------------------------------------------------------------------------------
+# KLayout runtime defaults
+#------------------------------------------------------------------------------
+$run_mode = 'tiling' if $run_mode.nil?
+$threads  = 4 if $threads.nil?
+$verbose  = false if $verbose.nil?
+
+#------------------------------------------------------------------------------
+# Input layout (batch mode via -rd input=<path>)
+#------------------------------------------------------------------------------
+if $input
+  if $topcell
+    source($input, $topcell)
+  else
+    source($input)
+  end
+end
+
+if $report
+  report('ADK Assembly DRC Report', $report)
+else
+  input_basename = File.basename(source.path, File.extname(source.path))
+  report('ADK Assembly DRC Report', "#{input_basename}_adk_drc.lyrdb")
+end
+
+#------------------------------------------------------------------------------
+# Path resolution
+#------------------------------------------------------------------------------
+adk_root       = File.expand_path(File.join(File.dirname(__FILE__), '..', '..'))
+config_dir     = File.join(adk_root, 'config')
+rule_decks_dir = File.join(File.dirname(__FILE__), 'rule_decks')
+
+#------------------------------------------------------------------------------
+# Load shared registries
+#------------------------------------------------------------------------------
+layers_json      = File.join(config_dir, 'layers.json')
+rule_params_json = File.join(config_dir, 'rule_params.json')
+
+raise "ADK config missing: #{layers_json}"      unless File.exist?(layers_json)
+raise "ADK config missing: #{rule_params_json}" unless File.exist?(rule_params_json)
+
+adk_layers = JSON.parse(File.read(layers_json))['layers']
+drc_rules  = JSON.parse(File.read(rule_params_json))['rules']
+logger.info("Loaded ADK layer registry from #{layers_json}")
+logger.info("Loaded ADK rule parameters from #{rule_params_json}")
+
+#------------------------------------------------------------------------------
+# Adapter selection
+#------------------------------------------------------------------------------
+if $adapter.nil? || $adapter.empty?
+  raise 'ADK requires an interposer adapter. Pass -rd adapter=<path-to-adapter.drc> ' \
+        "(typically via the runner's --interposer-adapter <name> flag)."
+end
+raise "Interposer adapter not found: #{$adapter}" unless File.exist?($adapter)
+logger.info("Using interposer adapter: #{$adapter}")
+
+#------------------------------------------------------------------------------
+# Eval chain (single eval so all locals are shared across decks)
+#   1. layers_def.drc -- ADK-owned abstract layers (exchange0_drw, exchange1_drw)
+#   2. adapter        -- declares chiplet_attachment_input; MAY override drc_rules
+#   3. <validation>   -- inline checks that every required input was declared
+#   4. 8_1_assembly.drc -- the four ASM rules
+#------------------------------------------------------------------------------
+required_inputs = ['chiplet_attachment_input']
+
+adapter_path_literal = $adapter
+validation_code = required_inputs.map { |name|
+  "raise \"Interposer adapter (#{adapter_path_literal}) must declare '#{name}'.\" " \
+  "unless defined?(#{name}) && !#{name}.nil?"
+}.join("\n")
+
+drc_source = [
+  File.read(File.join(rule_decks_dir, 'layers_def.drc')),
+  File.read($adapter),
+  validation_code,
+  File.read(File.join(rule_decks_dir, '8_1_assembly.drc')),
+].join("\n")
+
+eval(drc_source)
+
+logger.info('ADK assembly DRC complete')
