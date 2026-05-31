@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+venv/
+.venv/
+
+# KLayout / DRC artifacts
+*.lyrdb
+*.log
+run_dir/
+
+# KiCad
+*-backups/
+*.kicad_prl
+fp-info-cache
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Session tracking (kept outside git tree per project convention)
+CHANGELOG.md

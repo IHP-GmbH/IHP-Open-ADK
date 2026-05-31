@@ -1,0 +1,12 @@
+{
+    "description": "ADK assembly-DRC rule parameter defaults. Consumed by the KLayout deck (klayout/drc/adk_assembly.drc) and the KiCad DRU generator (kicad/dru/generate_assembly_dru.py). Interposer adapters MAY override individual values via Ruby (drc_rules['ASM_b'] = X).",
+    "version": "0.1.0",
+    "rules": {
+        "ASM_b": 50.00,
+        "ASM_e": 10000.00
+    },
+    "rule_descriptions": {
+        "ASM_b": "Minimum spacing between chiplets, in micrometres. Edge-to-edge between adjacent exchange0 polygons.",
+        "ASM_e": "Minimum chiplet area, in square micrometres. Polygons in exchange0 below this threshold are flagged."
+    }
+}

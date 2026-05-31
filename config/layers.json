@@ -1,0 +1,16 @@
+{
+    "description": "ADK layer registry. Abstract layer names and their GDS (layer/datatype) coordinates. Consumed by the KLayout deck, the KiCad DRU generator, and any tool that needs to know which layer number an ADK abstract name maps to (e.g. hyp_to_gds.py).",
+    "version": "0.1.0",
+    "layers": {
+        "exchange0": {
+            "gds_layer": 190,
+            "gds_datatype": 0,
+            "purpose": "Mechanical outline of the chiplet die (face-down attachment area). One polygon per chiplet placed on the interposer."
+        },
+        "exchange1": {
+            "gds_layer": 191,
+            "gds_datatype": 0,
+            "purpose": "Reserved exchange-layer slot for future chiplet metadata."
+        }
+    }
+}

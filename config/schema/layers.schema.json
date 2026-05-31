@@ -1,0 +1,27 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://heterogenic-chip-design-project/adk/config/schema/layers.schema.json",
+    "title": "ADK layer registry",
+    "type": "object",
+    "required": ["version", "layers"],
+    "properties": {
+        "description": { "type": "string" },
+        "version": { "type": "string" },
+        "layers": {
+            "type": "object",
+            "patternProperties": {
+                "^[a-z][a-z0-9_]*$": {
+                    "type": "object",
+                    "required": ["gds_layer", "gds_datatype"],
+                    "properties": {
+                        "gds_layer": { "type": "integer", "minimum": 0, "maximum": 255 },
+                        "gds_datatype": { "type": "integer", "minimum": 0, "maximum": 255 },
+                        "purpose": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        }
+    }
+}
