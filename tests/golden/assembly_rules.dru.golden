@@ -1,0 +1,17 @@
+# ============================================================================
+# ADK assembly DRC rules (auto-generated)
+# ============================================================================
+#
+# Source: adk/config/rule_params.json
+#
+# Coverage:
+#   * ASM.a (chiplet boundary overlap) -- enforced by KiCad's native
+#     courtyard collision check; no rule emitted here.
+#   * ASM.b (chiplet-to-chiplet spacing) -- emitted below.
+#   * ASM.e (chiplet minimum area) and ASM.f (attachment geometry inside
+#     chiplet) have no clean KiCad DRU equivalent and are enforced
+#     post-layout only by the ADK KLayout deck (adk/klayout/drc).
+
+(rule "ASM.b - Chiplet min spacing"
+  (constraint courtyard_clearance (min 50um))
+  (condition "A.Type == 'Footprint' && B.Type == 'Footprint'"))
