@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# IHP SG13G2 interposer adapter.
+#
+# Declares ADK abstract inputs in terms of IHP-specific layers. IHP's
+# chiplet-attachment mechanism is the Cu pillar, formed where the
+# passivation opening (9/35) and the final Cu pad (41/35) overlap.
+
+passiv_pillar = polygons(9, 35)
+dfpad_pillar  = polygons(41, 35)
+
+chiplet_attachment_input = passiv_pillar.and(dfpad_pillar)
