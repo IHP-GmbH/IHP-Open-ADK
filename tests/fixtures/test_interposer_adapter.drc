@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Synthetic interposer adapter for ADK regression tests.
+#
+# Declares the required abstract inputs over a fabricated layer (999/0) so
+# the test suite has zero dependency on any real PDK being installed.
+
+chiplet_attachment_input = polygons(999, 0)
