@@ -4,11 +4,11 @@ How other tools in the ecosystem consume the ADK.
 
 ## `hyp_to_gds.py` (`chiplet_kicad_plugin/`)
 
-The HYP-to-GDS converter stamps `exchange0` polygons for each chiplet.
-The layer number is read from `adk/config/layers.json` via the
-`ADK_ROOT` environment variable (default: `../adk`). A hardcoded
-fallback to `(190, 0)` is kept with a one-time warning if the config
-is missing.
+The HYP-to-GDS converter writes a `<gds>.boundaries.json` manifest beside
+the assembly GDS: one mechanical-boundary polygon per placed chiplet, with
+per-chiplet identity (instance, source-die, transform). The boundary is ADK
+assembly metadata and is NOT stamped on any GDS layer, so it cannot alias a
+PDK fabrication layer. The assembly DRC runner auto-discovers the manifest.
 
 No label-stamping is added: chiplets remain generic in the GDS.
 

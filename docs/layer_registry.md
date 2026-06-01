@@ -1,38 +1,44 @@
 # Layer registry
 
-`config/layers.json` is the authoritative source for every layer number
-the ADK or any consuming tool needs.
+The chiplet boundary is **ADK assembly metadata carried by a per-assembly
+manifest** (`config/schema/boundary_manifest.schema.json`), outside any PDK
+layer namespace. `config/layers.json` only records the **legacy** fabrication
+location of the boundary, consulted by the assembly DRC's `--legacy-exchange0`
+compat path for pre-migration GDS.
 
-## exchange0 (190 / 0)
+## Why the boundary left the fab namespace
 
-Mechanical outline of one chiplet die, drawn face-down on the
-interposer. One polygon per placed chiplet.
+`exchange0` was bound to GDS `190/0`, which is IHP SG13G2's real `Exchange0`
+layer. Pinning the ADK's cross-PDK assembly contract to an IHP fab number was
+an abstraction leak (the ADK sits above all PDKs) and risked colliding with a
+chiplet's own geometry on that layer. The boundary now lives in the manifest,
+so it is PDK-agnostic by construction and cannot alias any process or chiplet
+geometry.
 
-The outline is the *die mechanical footprint* — not a bond-pad region
-and not an attachment-area region. Bond-pad and attachment regions are
-handled by `chiplet_attachment_input` (an abstract input declared by
-the interposer adapter). Spacing, overlap, and area tolerances are
-encoded in rule **parameter values** (`ASM_b`, `ASM_e`, …); never by
-stamping a larger geometry.
+## Boundary manifest (default)
 
-## exchange1 (191 / 0)
+Producers (`chiplet_kicad_plugin/hyp_to_gds.py`,
+`gds_to_kicad/blackbox_chiplet.py`) write a `<gds>.boundaries.json` sidecar:
+one polygon per placed chiplet, with per-chiplet identity (instance,
+source-die, transform) and the contour in DBU and microns. The assembly DRC
+runner auto-discovers it and injects the polygons into the deck as the
+`chiplet_boundary` layer. Schema: `config/schema/boundary_manifest.schema.json`.
 
-Reserved slot for future per-chiplet metadata. Not consumed by any
-v0.1.0 rule.
+## exchange0 (190 / 0) — legacy compat only
+
+Historical fabrication-layer location of the boundary. Read by
+`klayout/drc/rule_decks/layers_def.drc` only when the deck runs with
+`legacy_exchange0` set (runner flag `--legacy-exchange0`), to check a
+pre-migration GDS that still carries boundaries on `190/0`.
+
+## exchange1 (191 / 0) — unused
+
+Historically a reserved second exchange slot. No longer consumed by the deck.
 
 ## Consumers
 
-- `klayout/drc/rule_decks/layers_def.drc` — defines
-  `exchange0_drw = polygons(190, 0)` and `exchange1_drw = polygons(191, 0)`.
-- `klayout/lyp/adk_layers.lyp` — KLayout layer-properties fragment.
-- `chiplet_kicad_plugin/hyp_to_gds.py` — reads
-  `layers.json["exchange0"]["gds_layer"]` instead of the historical
-  hardcoded `190`.
-
-## Adding a new layer
-
-1. Append an entry to `layers.json` (lowercase snake_case name).
-2. Document its semantics here.
-3. Add the corresponding `polygons(layer, datatype)` line to
-   `klayout/drc/rule_decks/layers_def.drc`.
-4. Add the equivalent entry to `klayout/lyp/adk_layers.lyp`.
+- `klayout/drc/adk_assembly.drc` — parses the manifest and injects it.
+- `klayout/drc/rule_decks/layers_def.drc` — builds `chiplet_boundary` from the
+  injected manifest (default), or from `polygons(190, 0)` in legacy mode.
+- `chiplet_kicad_plugin/hyp_to_gds.py`, `gds_to_kicad/blackbox_chiplet.py` —
+  emit the manifest.

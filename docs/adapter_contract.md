@@ -51,7 +51,9 @@ generator, provided the generator is invoked with
 ## What adapters must NOT do
 
 - Declare rules. Rules belong exclusively to the ADK deck.
-- Modify `exchange0_drw` / `exchange1_drw`. These are ADK-owned.
+- Declare or modify the chiplet boundary. It is injected by the ADK from the
+  boundary manifest (`config/schema/boundary_manifest.schema.json`), not a
+  layer adapters can touch.
 - Import other `.drc` files. Adapters are self-contained.
 
 ## Evolving the contract
