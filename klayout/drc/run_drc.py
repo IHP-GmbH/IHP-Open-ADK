@@ -148,6 +148,40 @@ def resolve_adapter(name_or_path: str) -> str:
     exit(1)
 
 
+def resolve_manifest_path(layout_path: str, manifest_arg: Optional[str],
+                          legacy_exchange0: bool) -> Optional[Path]:
+    """Resolve the boundary manifest path (fail-loud).
+
+    In manifest mode (default) an explicit ``--manifest`` is used if given,
+    otherwise ``<layout-stem>.boundaries.json`` next to the GDS is
+    auto-discovered. A missing manifest is a hard error: the runner never
+    checks an assembly with no boundary source, which would pass vacuously.
+    In legacy mode the manifest is not used (boundaries come from the GDS
+    exchange0 fab layer).
+    """
+    if legacy_exchange0:
+        return None
+
+    if manifest_arg:
+        manifest_path = Path(manifest_arg).resolve()
+    else:
+        layout = Path(layout_path)
+        manifest_path = layout.with_name(layout.stem + ".boundaries.json")
+
+    if not manifest_path.is_file():
+        logging.error(
+            "Boundary manifest not found: %s\n"
+            "The assembly DRC needs the chiplet boundaries. Either:\n"
+            "  - provide the <gds-stem>.boundaries.json sidecar (emitted by "
+            "hyp_to_gds / blackbox_chiplet), or\n"
+            "  - pass --legacy-exchange0 to check a pre-migration GDS that "
+            "carries boundaries on the exchange0 fab layer.",
+            manifest_path,
+        )
+        exit(1)
+    return manifest_path
+
+
 # ================================================================
 # -------------------- DRC EXECUTION -----------------------------
 # ================================================================
@@ -156,8 +190,14 @@ def resolve_adapter(name_or_path: str) -> str:
 def run_assembly_drc(layout_path: str, adapter_path: str, topcell: str,
                      run_dir: Path, threads: int = 4,
                      run_mode: str = "tiling",
-                     report_path: Optional[Path] = None) -> Path:
+                     report_path: Optional[Path] = None,
+                     manifest_path: Optional[Path] = None,
+                     legacy_exchange0: bool = False) -> Path:
     """Run the ADK assembly DRC wrapper via klayout -b.
+
+    Chiplet boundaries come from the producer's boundary manifest
+    (``manifest_path``) unless ``legacy_exchange0`` is set, in which case the
+    deck reads the historical exchange0 fab layer from the GDS.
 
     Returns the path to the generated .lyrdb report.
     """
@@ -174,7 +214,10 @@ def run_assembly_drc(layout_path: str, adapter_path: str, topcell: str,
         f" -rd topcell='{topcell}'"
         f" -rd threads={threads}"
         f" -rd run_mode='{run_mode}'"
+        f" -rd legacy_exchange0={'true' if legacy_exchange0 else 'false'}"
     )
+    if manifest_path is not None:
+        cmd += f" -rd manifest='{manifest_path}'"
 
     logging.info(
         f"Running assembly DRC on {Path(layout_path).name} "
@@ -260,6 +303,18 @@ Examples:
         "--report", type=str, default=None,
         help="Explicit report path (overrides default naming).",
     )
+    parser.add_argument(
+        "--manifest", type=str, default=None,
+        help="Boundary manifest sidecar (<gds-stem>.boundaries.json). "
+             "Auto-discovered next to --path if omitted. Holds the chiplet "
+             "boundaries the assembly DRC checks (PDK-agnostic; not a fab layer).",
+    )
+    parser.add_argument(
+        "--legacy-exchange0", action="store_true",
+        help="Compat mode: read chiplet boundaries from the historical "
+             "exchange0 fab layer in the GDS instead of a manifest "
+             "(for pre-migration assemblies).",
+    )
 
     return parser.parse_args()
 
@@ -290,12 +345,17 @@ def main():
     layout_path = check_layout_path(args.path)
     topcell = get_run_top_cell_name(args.topcell, layout_path)
     adapter_path = resolve_adapter(args.interposer_adapter)
+    manifest_path = resolve_manifest_path(
+        layout_path, args.manifest, args.legacy_exchange0
+    )
 
     report_path = Path(args.report).resolve() if args.report else None
     report = run_assembly_drc(
         layout_path, adapter_path, topcell, run_dir,
         threads=args.threads, run_mode=args.run_mode,
         report_path=report_path,
+        manifest_path=manifest_path,
+        legacy_exchange0=args.legacy_exchange0,
     )
     violations = check_drc_results(report)
 
