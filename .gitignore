@@ -23,6 +23,3 @@ fp-info-cache
 # OS
 .DS_Store
 Thumbs.db
-
-# Session tracking (kept outside git tree per project convention)
-CHANGELOG.md
