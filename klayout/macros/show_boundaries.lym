@@ -85,10 +85,10 @@ def run():
             pya.MessageBox.Ok)
         return
     idx = view.add_rdb(r)
-    try:
-        view.show_rdb(idx, view.active_cellview_index())
-    except Exception:
-        pass  # registered via add_rdb; the Marker Browser will list it
+    cvi = view.active_cellview_index
+    if callable(cvi):  # an int property in KLayout 0.30; a method in some builds
+        cvi = cvi()
+    view.show_rdb(idx, cvi)
     n = len(manifest.get("boundaries", []))
     pya.MessageBox.info(
         "Boundary viewer",
