@@ -10,7 +10,11 @@ per-chiplet identity (instance, source-die, transform). The boundary is ADK
 assembly metadata and is NOT stamped on any GDS layer, so it cannot alias a
 PDK fabrication layer. The assembly DRC runner auto-discovers the manifest.
 
-No label-stamping is added: chiplets remain generic in the GDS.
+By default no annotation is added: chiplets remain generic in the production
+GDS. The converter's opt-in `--annotate-boundaries` can paint the boundaries
+(with instance labels) onto a viewer-only layer (default 1000/0, outside IHP's
+fab range) for eyeball inspection, but no DRC rule reads it -- the manifest
+remains the sole assembly contract.
 
 ## `orchestrator.py` (`chiplet_kicad_plugin/pipeline/`)
 
