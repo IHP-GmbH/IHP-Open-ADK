@@ -1,0 +1,63 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://heterogenic-chip-design-project/adk/config/schema/boundary_manifest.schema.json",
+    "title": "ADK chiplet boundary manifest",
+    "description": "Sidecar emitted next to an assembly GDS by the boundary producer (hyp_to_gds / blackbox_chiplet). Carries one mechanical-boundary polygon per placed chiplet, OUTSIDE any fabrication-layer namespace, so the assembly contract is PDK-agnostic. Consumed by the ADK assembly DRC: adk_assembly.drc injects it and layers_def.drc builds the chiplet_boundary layer from polygon_dbu.",
+    "type": "object",
+    "required": ["schema", "version", "boundaries"],
+    "properties": {
+        "schema": { "const": "adk-boundary-manifest" },
+        "version": { "type": "string" },
+        "generator": { "type": "string" },
+        "assembly_gds": { "type": "string" },
+        "assembly_gds_sha256": { "type": "string" },
+        "dbu_um": { "type": "number", "exclusiveMinimum": 0 },
+        "top_cell": { "type": "string" },
+        "boundaries": {
+            "type": "array",
+            "description": "One entry per placed chiplet. polygon_dbu is authoritative for the DRC; the rest is identity/provenance.",
+            "items": {
+                "type": "object",
+                "required": ["polygon_dbu"],
+                "properties": {
+                    "instance": { "type": "string" },
+                    "source_die": { "type": "string" },
+                    "class": { "type": "string" },
+                    "kgd": { "type": ["boolean", "null"] },
+                    "transform": {
+                        "type": "object",
+                        "properties": {
+                            "origin_um": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+                            "rotation_deg": { "type": "number" },
+                            "mirror_x": { "type": "boolean" },
+                            "magnification": { "type": "number" }
+                        }
+                    },
+                    "bbox_dbu": { "type": "array", "items": { "type": "integer" }, "minItems": 4, "maxItems": 4 },
+                    "polygon_dbu": {
+                        "type": "array",
+                        "description": "Placed, transformed boundary contour in integer database units (1 DBU = dbu_um microns).",
+                        "items": {
+                            "type": "array",
+                            "items": { "type": "integer" },
+                            "minItems": 2,
+                            "maxItems": 2
+                        },
+                        "minItems": 3
+                    },
+                    "polygon_um": {
+                        "type": "array",
+                        "description": "Same contour in microns, for humans and non-DRC tools.",
+                        "items": {
+                            "type": "array",
+                            "items": { "type": "number" },
+                            "minItems": 2,
+                            "maxItems": 2
+                        },
+                        "minItems": 3
+                    }
+                }
+            }
+        }
+    }
+}

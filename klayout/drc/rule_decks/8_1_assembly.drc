@@ -15,21 +15,21 @@ logger.info('ADK: starting assembly DRC checks')
 
 # Rule ASM.a -- chiplet boundaries must not overlap.
 logger.info('ADK: ASM.a')
-asm_a = exchange0_drw.merged(2)
+asm_a = chiplet_boundary.merged(2)
 asm_a.output('ASM.a', 'ASM.a : Chiplet boundaries must not overlap')
 asm_a.forget
 
 # Rule ASM.b -- minimum chiplet-to-chiplet spacing.
 logger.info('ADK: ASM.b')
 asm_b_value = drc_rules['ASM_b'].to_f
-asm_b = exchange0_drw.space(asm_b_value.um, euclidian)
+asm_b = chiplet_boundary.space(asm_b_value.um, euclidian)
 asm_b.output('ASM.b', "ASM.b : Min. chiplet-to-chiplet spacing is #{asm_b_value} um")
 asm_b.forget
 
 # Rule ASM.e -- minimum chiplet area (degenerate-polygon sanity check).
 logger.info('ADK: ASM.e')
 asm_e_value = drc_rules['ASM_e'].to_f
-asm_e = exchange0_drw.with_area(nil, asm_e_value.um2)
+asm_e = chiplet_boundary.with_area(nil, asm_e_value.um2)
 asm_e.output('ASM.e', "ASM.e : Min. chiplet area is #{asm_e_value} um2")
 asm_e.forget
 
@@ -37,6 +37,6 @@ asm_e.forget
 # boundary must be fully inside it. Attachment geometry that lies wholly
 # outside any chiplet (e.g. on the interposer itself) is allowed.
 logger.info('ADK: ASM.f')
-asm_f = chiplet_attachment_input.interacting(exchange0_drw).not_inside(exchange0_drw)
+asm_f = chiplet_attachment_input.interacting(chiplet_boundary).not_inside(chiplet_boundary)
 asm_f.output('ASM.f', 'ASM.f : Chiplet-attachment geometry interacting with a chiplet must be fully inside it')
 asm_f.forget

@@ -67,6 +67,30 @@ logger.info("Loaded ADK layer registry from #{layers_json}")
 logger.info("Loaded ADK rule parameters from #{rule_params_json}")
 
 #------------------------------------------------------------------------------
+# Chiplet boundary source
+#   Default (manifest-native): the placed-chiplet boundaries come from the
+#   producer's <gds>.boundaries.json sidecar, passed as -rd manifest=<path> and
+#   injected here as `boundary_manifest`. The boundary lives in NO fabrication
+#   namespace, so it cannot alias a PDK layer or chiplet-internal geometry.
+#   Legacy/compat: -rd legacy_exchange0=true reads the historical exchange0 fab
+#   layer instead (for GDS produced before the manifest migration).
+#------------------------------------------------------------------------------
+legacy_exchange0 = !$legacy_exchange0.nil? &&
+                   ['1', 'true', 'yes'].include?($legacy_exchange0.to_s.downcase)
+boundary_manifest = nil
+unless legacy_exchange0
+  if $manifest.nil? || $manifest.to_s.empty?
+    raise 'ADK assembly DRC requires a boundary manifest. Pass -rd manifest=<path> ' \
+          '(the <gds>.boundaries.json sidecar emitted by hyp_to_gds/blackbox_chiplet), ' \
+          'or -rd legacy_exchange0=true to check a pre-migration exchange0 GDS.'
+  end
+  raise "Boundary manifest not found: #{$manifest}" unless File.exist?($manifest)
+  boundary_manifest = JSON.parse(File.read($manifest))
+  n_boundaries = (boundary_manifest['boundaries'] || []).size
+  logger.info("Loaded boundary manifest from #{$manifest} (#{n_boundaries} chiplet boundaries)")
+end
+
+#------------------------------------------------------------------------------
 # Adapter selection
 #------------------------------------------------------------------------------
 if $adapter.nil? || $adapter.empty?
@@ -78,7 +102,8 @@ logger.info("Using interposer adapter: #{$adapter}")
 
 #------------------------------------------------------------------------------
 # Eval chain (single eval so all locals are shared across decks)
-#   1. layers_def.drc -- ADK-owned abstract layers (exchange0_drw, exchange1_drw)
+#   1. layers_def.drc -- ADK chiplet_boundary layer (from the boundary manifest,
+#                        or the legacy exchange0 fab layer in compat mode)
 #   2. adapter        -- declares chiplet_attachment_input; MAY override drc_rules
 #   3. <validation>   -- inline checks that every required input was declared
 #   4. 8_1_assembly.drc -- the four ASM rules

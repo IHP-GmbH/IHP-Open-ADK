@@ -1,15 +1,26 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# ADK-owned abstract layers.
+# ADK chiplet-boundary layer.
 #
-# Layer numbers come from the ADK layer registry (config/layers.json),
-# loaded by adk_assembly.drc and passed into this eval as the `adk_layers`
-# hash. Tools outside the ADK that need to know which fabrication layer
-# `exchange0` maps to MUST read the same JSON registry (see
-# chiplet_kicad_plugin/hyp_to_gds.py for the canonical consumer).
+# Default (manifest-native): the placed-chiplet mechanical boundaries are
+# injected by adk_assembly.drc as `boundary_manifest` (parsed from the
+# producer's <gds>.boundaries.json sidecar). The boundary lives in NO
+# fabrication-layer namespace, so it can never alias a PDK layer or a chiplet's
+# internal geometry -- the assembly contract is PDK-agnostic by construction.
+#
+# Legacy/compat: when `legacy_exchange0` is set, read the boundary from the
+# historical exchange0 fabrication layer (config/layers.json) for GDS produced
+# before the manifest migration.
 
-exchange0_layer = adk_layers['exchange0']
-exchange1_layer = adk_layers['exchange1']
-
-exchange0_drw = polygons(exchange0_layer['gds_layer'], exchange0_layer['gds_datatype'])
-exchange1_drw = polygons(exchange1_layer['gds_layer'], exchange1_layer['gds_datatype'])
+if defined?(legacy_exchange0) && legacy_exchange0
+  exchange0_layer  = adk_layers['exchange0']
+  chiplet_boundary = polygons(exchange0_layer['gds_layer'], exchange0_layer['gds_datatype'])
+else
+  chiplet_boundary = polygon_layer
+  if defined?(boundary_manifest) && boundary_manifest && boundary_manifest['boundaries']
+    boundary_manifest['boundaries'].each do |b|
+      pts = b['polygon_dbu'].map { |xy| RBA::Point.new(xy[0].to_i, xy[1].to_i) }
+      chiplet_boundary.insert(RBA::Polygon.new(pts))
+    end
+  end
+end

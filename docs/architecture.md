@@ -37,7 +37,7 @@ Required abstract inputs (v0.1.0):
 | Name                       | Semantics                                            |
 |----------------------------|------------------------------------------------------|
 | `chiplet_attachment_input` | Region the interposer offers for chiplet attachment  |
-| `exchange0_drw`            | Mechanical outline of each chiplet die (face-down)   |
+| `chiplet_boundary`         | Mechanical outline of each placed chiplet, injected from the boundary manifest (not a fab layer, not adapter-declared) |
 
 Note `chiplet_attachment_input` is **semantic, not technology-specific**.
 On IHP it is derived from Cu pillars (`passiv_pillar AND dfpad_pillar`).
@@ -52,9 +52,9 @@ be a chiplet adapter" — is rejected for v0.1.0.
 The asymmetry is real: the interposer's fabrication geometry IS in the
 assembled GDS (the substrate metal stack), so rules need a way to talk
 about it abstractly. Chiplet internals are NOT in the assembled GDS;
-they are represented only by `exchange0` (a mechanical outline). The
-four current ASM rules treat all chiplets uniformly through `exchange0`
-and need nothing more.
+they are represented only by `chiplet_boundary` (a mechanical outline
+carried by the boundary manifest). The four current ASM rules treat all
+chiplets uniformly through `chiplet_boundary` and need nothing more.
 
 If a future use case emerges for per-chiplet-type checks (e.g. "chiplet
 of type X must expose its declared bump pattern"), the right mechanism
@@ -77,7 +77,8 @@ the KLayout deck and the KiCad DRU generator. Both must read these
 registries and apply adapter overrides identically, so the two
 toolchains agree on what they are checking.
 
-Tools outside the ADK (e.g. `hyp_to_gds.py`) read `config/layers.json`
-to learn which GDS layer number to use for `exchange0`. This
-eliminates the hardcoded `(190, 0)` literals previously scattered
-through the ecosystem.
+The chiplet boundary is carried by a per-assembly manifest
+(`config/schema/boundary_manifest.schema.json`) that producers
+(`hyp_to_gds.py`, `blackbox_chiplet.py`) emit and the DRC runner injects.
+It lives outside any fabrication-layer namespace, so the assembly contract
+is PDK-agnostic and no `(190, 0)` literal survives in the default path.

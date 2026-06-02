@@ -1,16 +1,16 @@
 {
-    "description": "ADK layer registry. Abstract layer names and their GDS (layer/datatype) coordinates. Consumed by the KLayout deck, the KiCad DRU generator, and any tool that needs to know which layer number an ADK abstract name maps to (e.g. hyp_to_gds.py).",
-    "version": "0.1.0",
+    "description": "ADK layer registry (LEGACY). The chiplet boundary is no longer bound to a fabrication layer: it is carried by the per-assembly boundary manifest (config/schema/boundary_manifest.schema.json), outside any PDK namespace. The entries below are legacy-compat only, read by the assembly DRC's --legacy-exchange0 path for pre-migration GDS.",
+    "version": "0.2.0",
     "layers": {
         "exchange0": {
             "gds_layer": 190,
             "gds_datatype": 0,
-            "purpose": "Mechanical outline of the chiplet die (face-down attachment area). One polygon per chiplet placed on the interposer."
+            "purpose": "Legacy fabrication-layer location of the chiplet boundary (IHP SG13G2 Exchange0, 190/0). Read only by layers_def.drc in --legacy-exchange0 compat mode. The default boundary source is the boundary manifest."
         },
         "exchange1": {
             "gds_layer": 191,
             "gds_datatype": 0,
-            "purpose": "Reserved exchange-layer slot for future chiplet metadata."
+            "purpose": "Unused. Historically a reserved second exchange slot; no longer consumed by the deck."
         }
     }
 }
