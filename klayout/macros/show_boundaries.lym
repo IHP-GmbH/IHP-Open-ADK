@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<klayout-macro>
+ <description>Show chiplet boundaries (ADK boundary manifest)</description>
+ <version>1.0</version>
+ <category>pymacros</category>
+ <prolog/>
+ <epilog/>
+ <doc>Reads the &lt;gds-stem&gt;.boundaries.json sidecar next to the current layout and shows each placed chiplet's mechanical boundary as markers in the Marker Browser. Viewer-only: nothing is written into the GDS. This is the same sidecar the ADK assembly DRC reads, so the markers are exactly what the checker injects.</doc>
+ <autorun>false</autorun>
+ <autorun-early>false</autorun-early>
+ <priority>0</priority>
+ <shortcut/>
+ <show-in-menu>true</show-in-menu>
+ <group-name/>
+ <menu-path>tools_menu.end</menu-path>
+ <interpreter>python</interpreter>
+ <dsl-interpreter-name/>
+ <text>
+import os
+import sys
+import pya
+
+
+def _find_core_dir():
+    # The companion module boundaries_to_rdb.py is the single source of the
+    # build logic (also used by the CLI and the tests). Locate it without
+    # assuming KLayout exposes __file__ for installed macros.
+    root = os.environ.get("ADK_ROOT")
+    if root:
+        cand = os.path.join(root, "klayout", "macros")
+        if os.path.isfile(os.path.join(cand, "boundaries_to_rdb.py")):
+            return cand
+    try:
+        return os.path.dirname(os.path.realpath(__file__))
+    except NameError:
+        pass
+    for p in os.environ.get("KLAYOUT_PATH", "").split(os.pathsep):
+        for cand in (os.path.join(p, "macros"), p):
+            if os.path.isfile(os.path.join(cand, "boundaries_to_rdb.py")):
+                return cand
+    return None
+
+
+def run():
+    core_dir = _find_core_dir()
+    if not core_dir:
+        pya.MessageBox.warning(
+            "Boundary viewer",
+            "Could not locate boundaries_to_rdb.py. Set ADK_ROOT to the ADK "
+            "checkout, or load this macro via KLAYOUT_PATH=.../adk/klayout.",
+            pya.MessageBox.Ok)
+        return
+    if core_dir not in sys.path:
+        sys.path.insert(0, core_dir)
+    import boundaries_to_rdb as core
+
+    view = pya.Application.instance().main_window().current_view()
+    if view is None:
+        pya.MessageBox.warning(
+            "Boundary viewer", "Open an assembly GDS first.", pya.MessageBox.Ok)
+        return
+    cv = view.active_cellview()
+    layout_path = cv.filename()
+    if not layout_path:
+        pya.MessageBox.warning(
+            "Boundary viewer",
+            "The current layout has no file path; save it next to its "
+            "boundaries.json sidecar first.",
+            pya.MessageBox.Ok)
+        return
+    sidecar = core.find_sidecar(layout_path)
+    if not os.path.isfile(str(sidecar)):
+        pya.MessageBox.warning(
+            "Boundary viewer",
+            "No boundary sidecar found:\n%s\n\nGenerate the GDS with hyp_to_gds "
+            "or blackbox_chiplet, which emit it." % str(sidecar),
+            pya.MessageBox.Ok)
+        return
+    try:
+        manifest = core.load_manifest(sidecar)
+        r = core.build_rdb(manifest)
+    except Exception as e:
+        pya.MessageBox.critical(
+            "Boundary viewer", "Failed to read the manifest:\n%s" % str(e),
+            pya.MessageBox.Ok)
+        return
+    idx = view.add_rdb(r)
+    cvi = view.active_cellview_index
+    if callable(cvi):  # an int property in KLayout 0.30; a method in some builds
+        cvi = cvi()
+    view.show_rdb(idx, cvi)
+    n = len(manifest.get("boundaries", []))
+    pya.MessageBox.info(
+        "Boundary viewer",
+        "Loaded %d chiplet boundary marker(s) into the Marker Browser." % n,
+        pya.MessageBox.Ok)
+
+
+run()
+</text>
+</klayout-macro>
