@@ -28,6 +28,7 @@ provided the generator is invoked with `--interposer-adapter <name>`.
 
 ## Naming
 
-Filename: `<vendor>_<process>_interposer.drc`. The basename (without
-extension) is what gets passed to `--interposer-adapter`. The MVP adapter is
-`ihp_sg13g2_interposer`.
+Filename: `<product>.drc`, where `<product>` is the interposer's formal
+short name. The basename (without extension) is what gets passed to
+`--interposer-adapter`. The MVP adapter is `intm4tm2` (IHP 130-nm
+IntM4TM2 aluminum BEOL interposer).

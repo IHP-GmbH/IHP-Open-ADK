@@ -294,9 +294,9 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s --path design.gds --interposer-adapter ihp_sg13g2_interposer
+  %(prog)s --path design.gds --interposer-adapter intm4tm2
   %(prog)s --path design.gds --interposer-adapter /abs/path/to/custom.drc
-  %(prog)s --path design.gds --interposer-adapter ihp_sg13g2_interposer --interconnect-adapter ihp_cupillar
+  %(prog)s --path design.gds --interposer-adapter intm4tm2 --interconnect-adapter ihp_cupillar
 """,
     )
 

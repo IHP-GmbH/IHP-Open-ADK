@@ -10,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from run_drc import get_rules_with_violations
 
 ADK_ROOT = Path(__file__).resolve().parents[1]
@@ -167,3 +169,15 @@ def test_runner_aborts_without_manifest(fixture_layouts, test_adapter, tmp_path)
     assert "manifest" in combined, (
         f"Error must mention the missing manifest. Output:\n{combined}"
     )
+
+
+def test_interposer_adapter_id_resolves_plain_only():
+    """'intm4tm2' is the only id for the IHP interposer adapter. The
+    pre-rename spellings must NOT resolve: no alias map, no fallback."""
+    from run_drc import resolve_adapter
+    resolved = resolve_adapter("intm4tm2")
+    assert resolved.endswith("intm4tm2.drc")
+    assert Path(resolved).is_file()
+    for stale in ("ihp_intm4tm2", "ihp_sg13g2_interposer"):
+        with pytest.raises(SystemExit):
+            resolve_adapter(stale)

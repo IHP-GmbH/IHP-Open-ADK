@@ -5,7 +5,7 @@ Assembly DRC deck and standalone runner.
 ## Files (populated in subsequent commits)
 
 - `drc/adk_assembly.drc` — top-level deck. JSON loader + eval-with-shared-locals
-  pattern modelled on `interposer/.../interposer_ihp.drc`.
+  pattern modelled on `interposer/.../intm4tm2.drc`.
 - `drc/rule_decks/layers_def.drc` — abstract layer definitions (only
   `exchange0_drw`, `exchange1_drw`). Everything else comes from the interposer
   adapter.

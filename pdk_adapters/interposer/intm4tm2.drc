@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# IHP SG13G2 interposer adapter.
+# IHP 130-nm IntM4TM2 aluminum BEOL interposer adapter.
 #
-# Declares ADK abstract inputs in terms of IHP-specific layers. IHP's
+# Declares ADK abstract inputs in terms of IHP-specific layers. IntM4TM2's
 # chiplet-attachment mechanism is the Cu pillar, formed where the
 # passivation opening (9/35) and the final Cu pad (41/35) overlap.
 

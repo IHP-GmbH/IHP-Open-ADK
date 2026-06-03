@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ADK_ROOT = Path(__file__).resolve().parents[1]
 DRU_DIR = ADK_ROOT / "kicad" / "dru"
 GENERATOR = DRU_DIR / "generate_assembly_dru.py"
@@ -58,8 +60,17 @@ def test_cli_writes_file(tmp_path):
 def test_ihp_adapter_has_no_numeric_overrides():
     """The current IHP adapter declares only layer mappings; the parser
     must return {} without crashing on the AND-intersection line."""
-    adapter = resolve_adapter_path("ihp_sg13g2_interposer")
+    adapter = resolve_adapter_path("intm4tm2")
     assert parse_adapter_overrides(adapter) == {}
+
+
+def test_stale_adapter_ids_do_not_resolve():
+    """'intm4tm2' is the only id for the IHP interposer adapter. The
+    pre-rename spellings must NOT resolve: no alias map, no fallback."""
+    assert resolve_adapter_path("intm4tm2").name == "intm4tm2.drc"
+    for stale in ("ihp_intm4tm2", "ihp_sg13g2_interposer"):
+        with pytest.raises(FileNotFoundError):
+            resolve_adapter_path(stale)
 
 
 def test_adapter_override_is_applied(tmp_path):

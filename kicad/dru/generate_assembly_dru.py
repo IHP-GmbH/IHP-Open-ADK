@@ -90,7 +90,7 @@ def parse_interconnect_overrides(adapter_path: Path) -> Dict[str, float]:
 
 
 def resolve_adapter_path(name_or_path: str) -> Path:
-    """Resolve a shortname (e.g. 'ihp_sg13g2_interposer') or a .drc path."""
+    """Resolve a shortname (e.g. 'intm4tm2') or a .drc path."""
     candidate = Path(name_or_path)
     if candidate.suffix == ".drc" and candidate.is_file():
         return candidate.resolve()
@@ -156,7 +156,7 @@ def parse_args():
         epilog="""
 Examples:
   %(prog)s                                              # defaults, stdout
-  %(prog)s --interposer-adapter ihp_sg13g2_interposer    # adapter overrides
+  %(prog)s --interposer-adapter intm4tm2    # adapter overrides
   %(prog)s --out assembly.kicad_dru                      # write to file
 """,
     )
