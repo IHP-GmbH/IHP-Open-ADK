@@ -16,9 +16,12 @@ GOLDEN = Path(__file__).resolve().parent / "golden" / "assembly_rules.dru.golden
 sys.path.insert(0, str(DRU_DIR))
 from generate_assembly_dru import (  # noqa: E402
     load_defaults,
+    load_interconnect_defaults,
     parse_adapter_overrides,
+    parse_interconnect_overrides,
     render_assembly_rules,
     resolve_adapter_path,
+    resolve_interconnect_adapter_path,
 )
 
 
@@ -87,3 +90,39 @@ def test_adapter_parser_ignores_commented_overrides(tmp_path):
     )
     overrides = parse_adapter_overrides(custom)
     assert overrides == {"ASM_e": 5000.0}
+
+
+# ---------------------------------------------------------------------------
+# Interconnect axis (additive; the default render must stay byte-identical)
+# ---------------------------------------------------------------------------
+
+def test_default_render_unaffected_by_interconnect_kwargs():
+    """Passing interconnect_adapter_name=None keeps the golden byte-identical."""
+    rules = load_defaults()
+    rendered = render_assembly_rules(rules, interconnect_adapter_name=None)
+    assert rendered.encode() == _golden_bytes()
+
+
+def test_interconnect_adapter_adds_provenance_comment():
+    """With an interconnect adapter the ASM.b rule survives and a provenance
+    comment for the IXN axis is appended (no new constraint)."""
+    rules = load_defaults()
+    rendered = render_assembly_rules(
+        rules, interconnect_adapter_name="ihp_cupillar")
+    assert "courtyard_clearance (min 50um)" in rendered
+    assert "Interconnect axis: ihp_cupillar" in rendered
+    # IXN rules are post-layout only -> no courtyard constraint emitted for them.
+    assert rendered.count("courtyard_clearance") == 1
+
+
+def test_ihp_cupillar_interconnect_overrides_parsed():
+    adapter = resolve_interconnect_adapter_path("ihp_cupillar")
+    overrides = parse_interconnect_overrides(adapter)
+    assert overrides == {"IXN_spacing": 40.0, "IXN_pitch": 80.0, "IXN_pad_size": 40.0}
+
+
+def test_interconnect_defaults_load():
+    defaults = load_interconnect_defaults()
+    assert defaults["IXN_spacing"] == 40.0
+    assert defaults["IXN_pitch"] == 80.0
+    assert defaults["IXN_pad_size"] == 40.0

@@ -1,0 +1,34 @@
+# frozen_string_literal: true
+# SPDX-License-Identifier: Apache-2.0
+#
+# ADK interconnect-axis DRC rules (optional second axis).
+#
+# Only concatenated into the eval chain when an interconnect adapter is loaded
+# (see adk_assembly.drc). Checks the bump-to-bump method rules (pitch/spacing)
+# over the abstract attachment region the interposer adapter exposes.
+# Interposer- and method-agnostic: the numbers come from the interconnect
+# adapter (interconnect_rules), never from a PDK layer.
+#
+# interconnect_region defaults to chiplet_attachment_input; an adapter MAY
+# narrow it. The pitch->space conversion mirrors the interposer deck
+# (6_9_copperpillar.drc:82-89): KLayout has no native pitch check, so
+# min_space = pitch - pad_size (conservative for pads larger than pad_size).
+
+logger.info('ADK: starting interconnect-axis DRC checks')
+
+ixn_region = (defined?(interconnect_region) && !interconnect_region.nil?) ? interconnect_region : chiplet_attachment_input
+
+# Rule IXN.b -- minimum edge-to-edge spacing between attachment points.
+logger.info('ADK: IXN.b')
+ixn_b_value = interconnect_rules['IXN_spacing'].to_f
+ixn_b = ixn_region.space(ixn_b_value.um, euclidian)
+ixn_b.output('IXN.b', "IXN.b : Min. attachment-point spacing is #{ixn_b_value} um")
+ixn_b.forget
+
+# Rule IXN.e -- minimum pitch, converted to a spacing (min_space = pitch - pad_size).
+logger.info('ADK: IXN.e')
+ixn_pitch_value = interconnect_rules['IXN_pitch'].to_f
+ixn_pad_size    = interconnect_rules['IXN_pad_size'].to_f
+ixn_e = ixn_region.space((ixn_pitch_value - ixn_pad_size).um, euclidian)
+ixn_e.output('IXN.e', "IXN.e : Min. attachment-point pitch is #{ixn_pitch_value} um")
+ixn_e.forget

@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# IHP SG13G2 solder-bump interconnect adapter.
+#
+# Method parameters for chiplet attachment via SAC305 solder bumps (PacTech,
+# Section 6.9.1). Operates on the chiplet_attachment_input region the
+# interposer adapter exposes; declares NO fabrication layers. Values mirror
+# the interposer solder-bump rules (Padb.b/Padb.e).
+
+interconnect_rules['IXN_spacing'] = 70.0    # Padb.b: edge-to-edge between bump pads
+interconnect_rules['IXN_pitch']   = 130.0   # Padb.e: centre-to-centre pitch
+interconnect_rules['IXN_pad_size'] = 60.0   # Padb.a: passiv opening

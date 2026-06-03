@@ -32,12 +32,13 @@ Rules under `klayout/drc/rule_decks/` and `kicad/dru/templates/` reference
 **abstract input names only**. The mapping from abstract names to
 PDK-specific fabrication layers lives in adapters under `pdk_adapters/`.
 
-Required abstract inputs (v0.1.0):
+Required abstract inputs (v0.2.0):
 
-| Name                       | Semantics                                            |
-|----------------------------|------------------------------------------------------|
-| `chiplet_attachment_input` | Region the interposer offers for chiplet attachment  |
-| `chiplet_boundary`         | Mechanical outline of each placed chiplet, injected from the boundary manifest (not a fab layer, not adapter-declared) |
+| Name                       | Axis | Semantics                                            |
+|----------------------------|------|------------------------------------------------------|
+| `chiplet_attachment_input` | interposer | Region the interposer offers for chiplet attachment  |
+| `chiplet_boundary`         | manifest | Mechanical outline of each placed chiplet, injected from the boundary manifest (not a fab layer, not adapter-declared) |
+| `interconnect_region`      | interconnect (optional) | Region the interconnect method's pitch/spacing rules check; defaults to `chiplet_attachment_input` |
 
 Note `chiplet_attachment_input` is **semantic, not technology-specific**.
 On IHP it is derived from Cu pillars (`passiv_pillar AND dfpad_pillar`).
@@ -70,12 +71,32 @@ Future interposers plug in by adding ONE adapter file under
 `.chiplet` YAML's `interposer.adapter` field). ADK rules are not
 modified when a new interposer is added.
 
+## Interconnect axis
+
+A second, orthogonal adapter axis (v0.2.0). Where the interposer axis says
+*where* attachment lands, the interconnect axis says *how dense / by what
+method*: the bump-to-bump pitch/spacing rules that are a property of the bumping
+method (Cu pillar, microbump, …), not of the interposer.
+
+An interconnect adapter under `pdk_adapters/interconnect/` is a parameter pack
+(`interconnect_rules`); the `8_2_interconnect.drc` deck applies IXN.b/IXN.e over
+the abstract attachment region the interposer adapter exposes. Composing the two
+axes gives full modularity: swap the interposer adapter to change the substrate,
+swap the interconnect adapter to change the bumping vendor — neither touches the
+other, and ADK rules are unchanged either way.
+
+The axis is optional and additive. With no interconnect adapter selected, the
+deck, the eval chain, and every output byte are identical to v0.1.0. This keeps
+"Why no chiplet adapter" intact: chiplet internals still are not in the GDS; the
+interconnect axis governs attachment *method*, not chiplet contents.
+
 ## Cross-tool consistency
 
-`config/layers.json` and `config/rule_params.json` are shared between
-the KLayout deck and the KiCad DRU generator. Both must read these
-registries and apply adapter overrides identically, so the two
-toolchains agree on what they are checking.
+`config/layers.json`, `config/rule_params.json`, and (v0.2.0)
+`config/interconnect.json` are shared between the KLayout deck and the
+KiCad DRU generator. Both must read these registries and apply adapter
+overrides identically, so the two toolchains agree on what they are
+checking.
 
 The chiplet boundary is carried by a per-assembly manifest
 (`config/schema/boundary_manifest.schema.json`) that producers

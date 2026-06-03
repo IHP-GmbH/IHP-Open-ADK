@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# VendorX fine-pitch microbump interconnect adapter (DEMO, non-IHP).
+#
+# Demonstrates that the interconnect axis is vendor-neutral: a finer-pitch
+# microbump method with tighter numbers than any IHP cu-pillar option, on the
+# SAME IHP interposer. Declares NO IHP layer numbers; operates on the abstract
+# attachment region the active interposer adapter exposes.
+#
+# Swapping ihp_cupillar -> vendorx_microbump retightens the IXN rules without
+# touching the interposer adapter: same geometry, different verdict.
+
+interconnect_rules['IXN_spacing'] = 15.0   # finer than IHP (40 um)
+interconnect_rules['IXN_pitch']   = 50.0   # finer than IHP opt1 (75 um)
+interconnect_rules['IXN_pad_size'] = 35.0  # reuses the IHP cu-pillar opening

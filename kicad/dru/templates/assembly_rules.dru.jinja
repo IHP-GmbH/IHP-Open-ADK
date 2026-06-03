@@ -15,3 +15,10 @@
 (rule "ASM.b - Chiplet min spacing"
   (constraint courtyard_clearance (min {{ "%g" % rules.ASM_b }}um))
   (condition "A.Type == 'Footprint' && B.Type == 'Footprint'"))
+{% if interconnect_adapter_name -%}
+#
+# Interconnect axis: {{ interconnect_adapter_name }}
+#   * IXN.b (attachment-point spacing) and IXN.e (attachment-point pitch) are
+#     intra-footprint bump rules with no KiCad courtyard equivalent; they are
+#     enforced post-layout only by the ADK KLayout deck (8_2_interconnect.drc).
+{% endif -%}

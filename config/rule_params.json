@@ -1,6 +1,6 @@
 {
-    "description": "ADK assembly-DRC rule parameter defaults. Consumed by the KLayout deck (klayout/drc/adk_assembly.drc) and the KiCad DRU generator (kicad/dru/generate_assembly_dru.py). Interposer adapters MAY override individual values via Ruby (drc_rules['ASM_b'] = X).",
-    "version": "0.1.0",
+    "description": "ADK assembly-DRC rule parameter defaults. Consumed by the KLayout deck (klayout/drc/adk_assembly.drc) and the KiCad DRU generator (kicad/dru/generate_assembly_dru.py). Interposer adapters MAY override individual values via Ruby (drc_rules['ASM_b'] = X). v0.2.0 adds the optional interconnect axis (config/interconnect.json); the interposer-only path is unchanged.",
+    "version": "0.2.0",
     "rules": {
         "ASM_b": 50.00,
         "ASM_e": 10000.00

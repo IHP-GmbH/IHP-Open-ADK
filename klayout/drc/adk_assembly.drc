@@ -66,6 +66,13 @@ drc_rules  = JSON.parse(File.read(rule_params_json))['rules']
 logger.info("Loaded ADK layer registry from #{layers_json}")
 logger.info("Loaded ADK rule parameters from #{rule_params_json}")
 
+# Interconnect-axis rule defaults (optional second axis). Tolerate absence so a
+# partial checkout or an interposer-only run still works; an interconnect adapter
+# overrides these the same way an interposer adapter overrides drc_rules.
+interconnect_json  = File.join(config_dir, 'interconnect.json')
+interconnect_rules = File.exist?(interconnect_json) ? JSON.parse(File.read(interconnect_json))['rules'] : {}
+logger.info("Loaded ADK interconnect parameters from #{interconnect_json}") if File.exist?(interconnect_json)
+
 #------------------------------------------------------------------------------
 # Chiplet boundary source
 #   Default (manifest-native): the placed-chiplet boundaries come from the
@@ -101,12 +108,28 @@ raise "Interposer adapter not found: #{$adapter}" unless File.exist?($adapter)
 logger.info("Using interposer adapter: #{$adapter}")
 
 #------------------------------------------------------------------------------
+# Interconnect adapter selection (optional second axis)
+#   Absent => interconnect axis disabled; the eval chain and output are identical
+#   to a run without this feature. Present => its method rules (pitch/spacing)
+#   run over the abstract attachment region the interposer adapter exposes.
+#------------------------------------------------------------------------------
+interconnect_adapter = (!$interconnect_adapter.nil? && !$interconnect_adapter.to_s.empty?) ? $interconnect_adapter : nil
+if interconnect_adapter
+  raise "Interconnect adapter not found: #{interconnect_adapter}" unless File.exist?(interconnect_adapter)
+  logger.info("Using interconnect adapter: #{interconnect_adapter}")
+end
+
+#------------------------------------------------------------------------------
 # Eval chain (single eval so all locals are shared across decks)
 #   1. layers_def.drc -- ADK chiplet_boundary layer (from the boundary manifest,
 #                        or the legacy exchange0 fab layer in compat mode)
-#   2. adapter        -- declares chiplet_attachment_input; MAY override drc_rules
-#   3. <validation>   -- inline checks that every required input was declared
+#   2. interposer adapter -- declares chiplet_attachment_input; MAY override drc_rules
+#   3. <validation>   -- inline checks that every required interposer input was declared
 #   4. 8_1_assembly.drc -- the four ASM rules
+#   -- the following two run ONLY when an interconnect adapter is loaded --
+#   2b. interconnect adapter -- sets interconnect_rules (IXN_*); MAY narrow interconnect_region
+#   3b. <validation>   -- inline checks that every required interconnect key was set
+#   5. 8_2_interconnect.drc -- the IXN pitch/spacing rules
 #------------------------------------------------------------------------------
 required_inputs = ['chiplet_attachment_input']
 
@@ -116,12 +139,29 @@ validation_code = required_inputs.map { |name|
   "unless defined?(#{name}) && !#{name}.nil?"
 }.join("\n")
 
-drc_source = [
+# Build the eval chain. The interposer-only branch is byte-identical to the
+# pre-interconnect deck: [layers_def, adapter, validation, 8_1_assembly]. The
+# interconnect adapter, its required-input validation, and 8_2_interconnect.drc
+# are appended ONLY when an interconnect adapter is loaded.
+parts = [
   File.read(File.join(rule_decks_dir, 'layers_def.drc')),
   File.read($adapter),
   validation_code,
-  File.read(File.join(rule_decks_dir, '8_1_assembly.drc')),
-].join("\n")
+]
+
+if interconnect_adapter
+  parts << File.read(interconnect_adapter)
+  ixn_required = ['IXN_spacing', 'IXN_pitch', 'IXN_pad_size']
+  parts << ixn_required.map { |k|
+    "raise \"Interconnect adapter (#{interconnect_adapter}) must set " \
+    "interconnect_rules['#{k}'].\" unless interconnect_rules.key?('#{k}')"
+  }.join("\n")
+end
+
+parts << File.read(File.join(rule_decks_dir, '8_1_assembly.drc'))
+parts << File.read(File.join(rule_decks_dir, '8_2_interconnect.drc')) if interconnect_adapter
+
+drc_source = parts.join("\n")
 
 eval(drc_source)
 
