@@ -1,0 +1,25 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://heterogenic-chip-design-project/adk/config/schema/interconnect.schema.json",
+    "title": "ADK interconnect-axis rule parameter registry",
+    "type": "object",
+    "required": ["version", "rules"],
+    "properties": {
+        "description": { "type": "string" },
+        "version": { "type": "string" },
+        "rules": {
+            "type": "object",
+            "patternProperties": {
+                "^[A-Z][A-Za-z0-9_]*$": { "type": "number" }
+            },
+            "additionalProperties": false
+        },
+        "rule_descriptions": {
+            "type": "object",
+            "patternProperties": {
+                "^[A-Z][A-Za-z0-9_]*$": { "type": "string" }
+            },
+            "additionalProperties": false
+        }
+    }
+}

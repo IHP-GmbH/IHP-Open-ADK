@@ -25,7 +25,9 @@ import jinja2
 
 ADK_ROOT = Path(__file__).resolve().parents[2]
 RULE_PARAMS_JSON = ADK_ROOT / "config" / "rule_params.json"
+INTERCONNECT_JSON = ADK_ROOT / "config" / "interconnect.json"
 ADAPTER_DIR = ADK_ROOT / "pdk_adapters" / "interposer"
+INTERCONNECT_ADAPTER_DIR = ADK_ROOT / "pdk_adapters" / "interconnect"
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 TEMPLATE_NAME = "assembly_rules.dru.jinja"
 
@@ -37,11 +39,25 @@ _OVERRIDE_RE = re.compile(
     r"(?P<value>-?\d+(?:\.\d+)?)"
 )
 
+# Same shape as _OVERRIDE_RE but for interconnect adapters' interconnect_rules[].
+_INTERCONNECT_OVERRIDE_RE = re.compile(
+    r"^\s*interconnect_rules\[\s*['\"](?P<name>[A-Za-z_][A-Za-z0-9_]*)['\"]\s*\]\s*=\s*"
+    r"(?P<value>-?\d+(?:\.\d+)?)"
+)
+
 
 def load_defaults(path: Path = RULE_PARAMS_JSON) -> Dict[str, float]:
     """Load ADK rule defaults from the JSON registry."""
     return {name: float(value)
             for name, value in json.loads(path.read_text())["rules"].items()}
+
+
+def load_interconnect_defaults(path: Path = INTERCONNECT_JSON) -> Dict[str, float]:
+    """Load ADK interconnect-axis defaults. Returns {} if the registry is absent."""
+    if not path.is_file():
+        return {}
+    return {name: float(value)
+            for name, value in json.loads(path.read_text()).get("rules", {}).items()}
 
 
 def parse_adapter_overrides(adapter_path: Path) -> Dict[str, float]:
@@ -56,6 +72,18 @@ def parse_adapter_overrides(adapter_path: Path) -> Dict[str, float]:
         if line.lstrip().startswith("#"):
             continue
         m = _OVERRIDE_RE.match(line)
+        if m:
+            overrides[m.group("name")] = float(m.group("value"))
+    return overrides
+
+
+def parse_interconnect_overrides(adapter_path: Path) -> Dict[str, float]:
+    """Extract numeric interconnect_rules[] overrides from an interconnect adapter."""
+    overrides: Dict[str, float] = {}
+    for line in adapter_path.read_text().splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        m = _INTERCONNECT_OVERRIDE_RE.match(line)
         if m:
             overrides[m.group("name")] = float(m.group("value"))
     return overrides
@@ -76,13 +104,36 @@ def resolve_adapter_path(name_or_path: str) -> Path:
     )
 
 
+def resolve_interconnect_adapter_path(name_or_path: str) -> Path:
+    """Resolve an interconnect adapter shortname or .drc path."""
+    candidate = Path(name_or_path)
+    if candidate.suffix == ".drc" and candidate.is_file():
+        return candidate.resolve()
+    shortname = name_or_path[:-4] if name_or_path.endswith(".drc") else name_or_path
+    candidate = INTERCONNECT_ADAPTER_DIR / f"{shortname}.drc"
+    if candidate.is_file():
+        return candidate.resolve()
+    raise FileNotFoundError(
+        f"Interconnect adapter not found: '{name_or_path}'. "
+        f"Looked for the literal path and for "
+        f"'{INTERCONNECT_ADAPTER_DIR / (shortname + '.drc')}'."
+    )
+
+
 def render_assembly_rules(rules: Dict[str, float],
                           adapter_name: Optional[str] = None,
-                          template_dir: Optional[Path] = None) -> str:
+                          template_dir: Optional[Path] = None,
+                          interconnect_rules: Optional[Dict[str, float]] = None,
+                          interconnect_adapter_name: Optional[str] = None) -> str:
     """Render the assembly DRU section.
 
     Returns a string suitable for writing to a .kicad_dru file or appending
     to a larger generator's output.
+
+    The interconnect_* arguments are appended (kwargs with defaults) so existing
+    callers (SP-031) are unaffected. With no interconnect adapter the rendered
+    output is byte-identical to before this axis existed: the interconnect block
+    is template-guarded on ``interconnect_adapter_name``.
     """
     env = jinja2.Environment(
         loader=jinja2.FileSystemLoader(str(template_dir or TEMPLATE_DIR)),
@@ -90,7 +141,12 @@ def render_assembly_rules(rules: Dict[str, float],
         undefined=jinja2.StrictUndefined,
     )
     template = env.get_template(TEMPLATE_NAME)
-    return template.render(rules=rules, adapter_name=adapter_name)
+    return template.render(
+        rules=rules,
+        adapter_name=adapter_name,
+        interconnect_rules=interconnect_rules or {},
+        interconnect_adapter_name=interconnect_adapter_name,
+    )
 
 
 def parse_args():
@@ -109,6 +165,13 @@ Examples:
         help="Interposer adapter shortname or .drc path. Numeric "
              "drc_rules[] overrides in the adapter are merged on top of "
              "config/rule_params.json defaults.",
+    )
+    parser.add_argument(
+        "--interconnect-adapter", default=None,
+        help="Optional interconnect adapter shortname or .drc path. Adds a "
+             "provenance comment for the bump pitch/spacing axis (IXN rules, "
+             "post-layout only). Omit for interposer-only output (identical to "
+             "before this axis existed).",
     )
     parser.add_argument(
         "--out", default=None,
@@ -135,7 +198,18 @@ def main():
         rules.update(parse_adapter_overrides(adapter_path))
         adapter_name = adapter_path.stem
 
-    rendered = render_assembly_rules(rules, adapter_name=adapter_name)
+    interconnect_rules = load_interconnect_defaults()
+    interconnect_adapter_name = None
+    if args.interconnect_adapter:
+        ixn_adapter_path = resolve_interconnect_adapter_path(args.interconnect_adapter)
+        interconnect_rules.update(parse_interconnect_overrides(ixn_adapter_path))
+        interconnect_adapter_name = ixn_adapter_path.stem
+
+    rendered = render_assembly_rules(
+        rules, adapter_name=adapter_name,
+        interconnect_rules=interconnect_rules,
+        interconnect_adapter_name=interconnect_adapter_name,
+    )
 
     if args.out:
         Path(args.out).write_text(rendered)

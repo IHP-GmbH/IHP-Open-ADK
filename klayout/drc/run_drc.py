@@ -124,6 +124,7 @@ def get_run_top_cell_name(topcell_arg: str, layout_path: str) -> str:
 
 _ADK_ROOT = Path(__file__).resolve().parents[2]
 _ADAPTER_DIR = _ADK_ROOT / "pdk_adapters" / "interposer"
+_INTERCONNECT_ADAPTER_DIR = _ADK_ROOT / "pdk_adapters" / "interconnect"
 
 
 def resolve_adapter(name_or_path: str) -> str:
@@ -143,6 +144,29 @@ def resolve_adapter(name_or_path: str) -> str:
 
     logging.error(
         f"Interposer adapter not found: '{name_or_path}'. "
+        f"Looked for the literal path and for '{adapter_path}'."
+    )
+    exit(1)
+
+
+def resolve_interconnect_adapter(name_or_path: str) -> str:
+    """Resolve a --interconnect-adapter argument to an absolute .drc path.
+
+    Parallel to resolve_adapter() but for the optional interconnect axis.
+    Accepts a shortname (resolved against pdk_adapters/interconnect/) or an
+    explicit path to a .drc file.
+    """
+    candidate = Path(name_or_path)
+    if candidate.suffix == ".drc" and candidate.is_file():
+        return str(candidate.resolve())
+
+    shortname = name_or_path[:-4] if name_or_path.endswith(".drc") else name_or_path
+    adapter_path = _INTERCONNECT_ADAPTER_DIR / f"{shortname}.drc"
+    if adapter_path.is_file():
+        return str(adapter_path.resolve())
+
+    logging.error(
+        f"Interconnect adapter not found: '{name_or_path}'. "
         f"Looked for the literal path and for '{adapter_path}'."
     )
     exit(1)
@@ -192,7 +216,8 @@ def run_assembly_drc(layout_path: str, adapter_path: str, topcell: str,
                      run_mode: str = "tiling",
                      report_path: Optional[Path] = None,
                      manifest_path: Optional[Path] = None,
-                     legacy_exchange0: bool = False) -> Path:
+                     legacy_exchange0: bool = False,
+                     interconnect_adapter_path: Optional[str] = None) -> Path:
     """Run the ADK assembly DRC wrapper via klayout -b.
 
     Chiplet boundaries come from the producer's boundary manifest
@@ -218,6 +243,8 @@ def run_assembly_drc(layout_path: str, adapter_path: str, topcell: str,
     )
     if manifest_path is not None:
         cmd += f" -rd manifest='{manifest_path}'"
+    if interconnect_adapter_path is not None:
+        cmd += f" -rd interconnect_adapter='{interconnect_adapter_path}'"
 
     logging.info(
         f"Running assembly DRC on {Path(layout_path).name} "
@@ -269,6 +296,7 @@ def parse_args():
 Examples:
   %(prog)s --path design.gds --interposer-adapter ihp_sg13g2_interposer
   %(prog)s --path design.gds --interposer-adapter /abs/path/to/custom.drc
+  %(prog)s --path design.gds --interposer-adapter ihp_sg13g2_interposer --interconnect-adapter ihp_cupillar
 """,
     )
 
@@ -281,6 +309,13 @@ Examples:
         help="Interposer adapter: a shortname (resolved against "
              "pdk_adapters/interposer/<name>.drc) or an absolute path to a "
              ".drc file.",
+    )
+    parser.add_argument(
+        "--interconnect-adapter", type=str, default=None,
+        help="Optional interconnect adapter: a shortname (resolved against "
+             "pdk_adapters/interconnect/<name>.drc) or an absolute path. Adds "
+             "the bump-to-bump pitch/spacing axis (IXN rules). Omit for "
+             "interposer-only checking (identical to before this axis existed).",
     )
     parser.add_argument(
         "--topcell", type=str, default=None,
@@ -345,6 +380,10 @@ def main():
     layout_path = check_layout_path(args.path)
     topcell = get_run_top_cell_name(args.topcell, layout_path)
     adapter_path = resolve_adapter(args.interposer_adapter)
+    interconnect_adapter_path = (
+        resolve_interconnect_adapter(args.interconnect_adapter)
+        if args.interconnect_adapter else None
+    )
     manifest_path = resolve_manifest_path(
         layout_path, args.manifest, args.legacy_exchange0
     )
@@ -356,6 +395,7 @@ def main():
         report_path=report_path,
         manifest_path=manifest_path,
         legacy_exchange0=args.legacy_exchange0,
+        interconnect_adapter_path=interconnect_adapter_path,
     )
     violations = check_drc_results(report)
 
