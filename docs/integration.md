@@ -23,7 +23,7 @@ The orchestrator reads each loaded `.chiplet` YAML's
 backward compatibility) and propagates it to the ADK runner invocation
 as `--interposer-adapter <value>`.
 
-## Gustavo's SP-031 (`interposer/scripts/generate_kicad_dru.py`)
+## Gustavo's SP-031 (`interposer/libs.tech/klayout/python/generate_kicad_dru.py`)
 
 His DRU generator `import`s
 `adk.kicad.dru.generate_assembly_dru.render_assembly_rules` and appends
