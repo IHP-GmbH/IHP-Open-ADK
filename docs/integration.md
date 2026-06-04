@@ -74,3 +74,31 @@ Precedent for the hard-fail rule: a complete GDS emitted without its
 requested Cu pillars looks fabricable and no downstream DRC can flag
 the absent geometry -- hyp_to_gds therefore aborts when pillars are
 requested and the interposer PDK is unreachable.
+
+### `${VAR}` references in path inputs
+
+Path inputs may reference the discovery variables above with `${VAR}`
+syntax -- in KiCad board text variables (`INTERPOSER_LYP`), footprint
+fields (`GDS_FILE`, `LYP_FILE`), hyp_to_gds CLI arguments, and the
+`.chiplet` entries those flow into (`technologies.*.layer_properties`,
+`components[].layout`):
+
+```yaml
+technologies:
+  intm4tm2:
+    layer_properties: ${INTERPOSER_PDK_ROOT}/libs.tech/klayout/tech/intm4tm2.lyp
+components:
+  - id: U1
+    layout: ${GDS_TO_KICAD_ROOT}/gds_files/dies/my_die.gds
+```
+
+Writers copy these values **verbatim** (the KiCad C++ exporter and the
+Python plugin writer stay byte-identical with zero emission logic).
+Readers (hyp_to_gds, chiplet-studio) expand each `${VAR}` on read with
+the discovery chain: environment -> sibling-checkout walk -> loud
+failure naming the variable. A set-but-invalid environment value falls
+through to the walk. Plain absolute and relative paths pass through
+untouched -- absolute paths remain the default emission (a `.chiplet`
+is machine-local unless the board data opts into `${VAR}` forms;
+consumers of a foreign `.chiplet` adjust paths themselves). Relative
+paths resolve against the `.chiplet` file's directory.
