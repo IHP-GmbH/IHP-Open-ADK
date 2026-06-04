@@ -3,16 +3,20 @@
 # IHP SG13G2 Cu-pillar interconnect adapter.
 #
 # Method parameters for chiplet attachment via Cu pillars (PacTech Table 6.1,
-# default Option 2). Operates on the chiplet_attachment_input region the
+# default Option 1). Operates on the chiplet_attachment_input region the
 # interposer adapter exposes; declares NO fabrication layers.
 #
 # interconnect_region is intentionally omitted -> the deck defaults it to
 # chiplet_attachment_input. Values mirror the interposer's default cu-pillar
 # option so the assembly-axis pitch check agrees with the interposer's own
-# Padc.b/Padc.e (interposer_tech_default.json Option 2). Per-option variants
-# (ihp_cupillar_opt1/opt3) are trivial copies with the Table 6.1 values for
-# those options; add them if a design needs option-specific checking.
+# Padc.a/Padc.b/Padc.e defaults (interposer_tech_default.json: 35/40/75,
+# Table 6.1 Option 1) -- both stages of the dual-stage DRC must check the
+# same numbers. Designs using the larger options (opt2/opt3) are checked
+# against this conservative floor, exactly like the interposer stage.
+# Per-option variants (ihp_cupillar_opt1/opt3) are trivial copies with the
+# Table 6.1 values for those options; add them if a design needs
+# option-specific checking.
 
 interconnect_rules['IXN_spacing'] = 40.0   # Padc.b: edge-to-edge between pillar pads
-interconnect_rules['IXN_pitch']   = 80.0   # Padc.e: centre-to-centre pitch
-interconnect_rules['IXN_pad_size'] = 40.0  # Padc.a: passiv opening (pitch->space conversion)
+interconnect_rules['IXN_pitch']   = 75.0   # Padc.e: centre-to-centre pitch
+interconnect_rules['IXN_pad_size'] = 35.0  # Padc.a: passiv opening (pitch->space conversion)

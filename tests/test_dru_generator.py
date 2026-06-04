@@ -127,13 +127,15 @@ def test_interconnect_adapter_adds_provenance_comment():
 
 
 def test_ihp_cupillar_interconnect_overrides_parsed():
+    # Table 6.1 Option 1 -- must mirror the interposer stage's defaults
+    # (interposer_tech_default.json Padc_a/Padc_b/Padc_e = 35/40/75).
     adapter = resolve_interconnect_adapter_path("ihp_cupillar")
     overrides = parse_interconnect_overrides(adapter)
-    assert overrides == {"IXN_spacing": 40.0, "IXN_pitch": 80.0, "IXN_pad_size": 40.0}
+    assert overrides == {"IXN_spacing": 40.0, "IXN_pitch": 75.0, "IXN_pad_size": 35.0}
 
 
 def test_interconnect_defaults_load():
     defaults = load_interconnect_defaults()
     assert defaults["IXN_spacing"] == 40.0
-    assert defaults["IXN_pitch"] == 80.0
-    assert defaults["IXN_pad_size"] == 40.0
+    assert defaults["IXN_pitch"] == 75.0
+    assert defaults["IXN_pad_size"] == 35.0

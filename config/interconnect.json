@@ -1,10 +1,10 @@
 {
-    "description": "ADK interconnect-axis rule parameter defaults. Consumed by the KLayout deck (klayout/drc/rule_decks/8_2_interconnect.drc) when an interconnect adapter is loaded. Interconnect adapters override individual values via Ruby (interconnect_rules['IXN_pitch'] = X). Defaults match the IHP cu-pillar default option (Table 6.1 Option 2). The interconnect axis is optional: with no interconnect adapter, this registry is unused and behaviour is identical to v0.1.0.",
+    "description": "ADK interconnect-axis rule parameter defaults. Consumed by the KLayout deck (klayout/drc/rule_decks/8_2_interconnect.drc) when an interconnect adapter is loaded. Interconnect adapters override individual values via Ruby (interconnect_rules['IXN_pitch'] = X). Defaults match the IHP cu-pillar default option (Table 6.1 Option 1: 35 um opening, 40 um space, 75 um pitch), mirroring the interposer stage's interposer_tech_default.json so both stages of the dual-stage DRC check the same numbers. The interconnect axis is optional: with no interconnect adapter, this registry is unused and behaviour is identical to v0.1.0.",
     "version": "0.2.0",
     "rules": {
         "IXN_spacing": 40.00,
-        "IXN_pitch": 80.00,
-        "IXN_pad_size": 40.00
+        "IXN_pitch": 75.00,
+        "IXN_pad_size": 35.00
     },
     "rule_descriptions": {
         "IXN_spacing": "Minimum edge-to-edge spacing between chiplet attachment points, in micrometres.",

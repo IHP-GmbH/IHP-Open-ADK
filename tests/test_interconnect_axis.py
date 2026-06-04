@@ -96,7 +96,7 @@ def test_no_interconnect_adapter_runs_no_ixn(tmp_path):
 
 
 def test_ihp_cupillar_flags_close_pads(tmp_path):
-    """ihp_cupillar (40 um spacing / 80 um pitch) flags pads only 20 um apart."""
+    """ihp_cupillar (40 um spacing / 75 um pitch) flags pads only 20 um apart."""
     gds = tmp_path / "close_pads.gds"
     _build_close_pads_gds(gds)
     v = _violations(gds, tmp_path / "run", interconnect_adapter="ihp_cupillar")
