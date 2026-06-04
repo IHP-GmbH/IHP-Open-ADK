@@ -217,7 +217,8 @@ def run_assembly_drc(layout_path: str, adapter_path: str, topcell: str,
                      report_path: Optional[Path] = None,
                      manifest_path: Optional[Path] = None,
                      legacy_exchange0: bool = False,
-                     interconnect_adapter_path: Optional[str] = None) -> Path:
+                     interconnect_adapter_path: Optional[str] = None,
+                     interconnect_methods_path: Optional[Path] = None) -> Path:
     """Run the ADK assembly DRC wrapper via klayout -b.
 
     Chiplet boundaries come from the producer's boundary manifest
@@ -245,6 +246,8 @@ def run_assembly_drc(layout_path: str, adapter_path: str, topcell: str,
         cmd += f" -rd manifest='{manifest_path}'"
     if interconnect_adapter_path is not None:
         cmd += f" -rd interconnect_adapter='{interconnect_adapter_path}'"
+    if interconnect_methods_path is not None:
+        cmd += f" -rd interconnect_methods='{interconnect_methods_path}'"
 
     logging.info(
         f"Running assembly DRC on {Path(layout_path).name} "
@@ -318,6 +321,16 @@ Examples:
              "interposer-only checking (identical to before this axis existed).",
     )
     parser.add_argument(
+        "--interconnect-methods", type=str, default=None,
+        help="Optional per-method interconnect file "
+             "(<gds-stem>.ixn_methods.json, emitted by the exporter from the "
+             ".chiplet's per-die connections + the interconnect PDK manifest). "
+             "Scopes the IXN checks per method: each method's pitch/spacing "
+             "runs on the attachment pads under ITS dies' boundaries, plus a "
+             "conservative cross-method spacing check. Requires the boundary "
+             "manifest. Without it the IXN axis stays assembly-global.",
+    )
+    parser.add_argument(
         "--topcell", type=str, default=None,
         help="Top-level cell name (auto-detected if omitted).",
     )
@@ -384,6 +397,15 @@ def main():
         resolve_interconnect_adapter(args.interconnect_adapter)
         if args.interconnect_adapter else None
     )
+    interconnect_methods_path = None
+    if args.interconnect_methods:
+        interconnect_methods_path = Path(args.interconnect_methods).resolve()
+        if not interconnect_methods_path.is_file():
+            logging.error(
+                "Interconnect methods file not found: %s",
+                interconnect_methods_path,
+            )
+            exit(1)
     manifest_path = resolve_manifest_path(
         layout_path, args.manifest, args.legacy_exchange0
     )
@@ -396,6 +418,7 @@ def main():
         manifest_path=manifest_path,
         legacy_exchange0=args.legacy_exchange0,
         interconnect_adapter_path=interconnect_adapter_path,
+        interconnect_methods_path=interconnect_methods_path,
     )
     violations = check_drc_results(report)
 

@@ -90,6 +90,15 @@ deck, the eval chain, and every output byte are identical to v0.1.0. This keeps
 "Why no chiplet adapter" intact: chiplet internals still are not in the GDS; the
 interconnect axis governs attachment *method*, not chiplet contents.
 
+The axis refines per method when the exporter supplies
+`<gds-stem>.ixn_methods.json` (derived from the `.chiplet`'s per-die
+`connection:` ids and the interconnect PDK manifest): each method's numbers
+run on the attachment pads under its dies' boundaries, with a conservative
+cross-method spacing between methods and the adapter numbers covering pads
+outside every method region. One interconnect PDK per assembly; what varies
+per die is the method within it. See `adapter_contract.md`,
+"Per-method refinement".
+
 ## Cross-tool consistency
 
 `config/layers.json`, `config/rule_params.json`, and (v0.2.0)

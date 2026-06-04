@@ -120,6 +120,36 @@ if interconnect_adapter
 end
 
 #------------------------------------------------------------------------------
+# Per-method interconnect (optional refinement of the interconnect axis)
+#   -rd interconnect_methods=<gds-stem>.ixn_methods.json -- emitted by the
+#   exporter from the .chiplet's per-die connections and the interconnect PDK
+#   manifest. Each method entry carries its own pitch/spacing numbers and the
+#   die instances using it; 8_2 then scopes the IXN checks per method via the
+#   boundary manifest (which is therefore required). Absent => the IXN axis
+#   stays assembly-global (adapter numbers over the whole attachment region).
+#------------------------------------------------------------------------------
+ixn_methods = nil
+if !$interconnect_methods.nil? && !$interconnect_methods.to_s.empty?
+  raise "Interconnect methods file not found: #{$interconnect_methods}" unless File.exist?($interconnect_methods)
+  ixn_methods = JSON.parse(File.read($interconnect_methods))['methods']
+  ixn_methods = nil if ixn_methods.nil? || ixn_methods.empty?
+  if ixn_methods
+    ixn_method_required = ['IXN_spacing', 'IXN_pitch', 'IXN_pad_size', 'dies']
+    ixn_methods.each do |mid, mdef|
+      ixn_method_required.each do |k|
+        raise "Interconnect methods entry '#{mid}' missing '#{k}' (#{$interconnect_methods})" unless mdef.key?(k)
+      end
+    end
+    if boundary_manifest.nil?
+      raise 'Per-method interconnect requires the boundary manifest ' \
+            '(-rd manifest=<gds-stem>.boundaries.json); legacy exchange0 mode ' \
+            'carries no per-die instance names.'
+    end
+    logger.info("Per-method interconnect: #{ixn_methods.keys.sort.join(', ')} (from #{$interconnect_methods})")
+  end
+end
+
+#------------------------------------------------------------------------------
 # Eval chain (single eval so all locals are shared across decks)
 #   1. layers_def.drc -- ADK chiplet_boundary layer (from the boundary manifest,
 #                        or the legacy exchange0 fab layer in compat mode)
@@ -129,7 +159,10 @@ end
 #   -- the following two run ONLY when an interconnect adapter is loaded --
 #   2b. interconnect adapter -- sets interconnect_rules (IXN_*); MAY narrow interconnect_region
 #   3b. <validation>   -- inline checks that every required interconnect key was set
-#   5. 8_2_interconnect.drc -- the IXN pitch/spacing rules
+#   5. 8_2_interconnect.drc -- the IXN pitch/spacing rules; appended when an
+#      interconnect adapter and/or a per-method file (ixn_methods) is loaded.
+#      With ixn_methods the checks scope per method over the dies' boundary
+#      regions; otherwise they run assembly-global with the adapter numbers.
 #------------------------------------------------------------------------------
 required_inputs = ['chiplet_attachment_input']
 
@@ -159,7 +192,7 @@ if interconnect_adapter
 end
 
 parts << File.read(File.join(rule_decks_dir, '8_1_assembly.drc'))
-parts << File.read(File.join(rule_decks_dir, '8_2_interconnect.drc')) if interconnect_adapter
+parts << File.read(File.join(rule_decks_dir, '8_2_interconnect.drc')) if interconnect_adapter || ixn_methods
 
 drc_source = parts.join("\n")
 

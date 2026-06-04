@@ -107,6 +107,25 @@ interposer adapter) — no fab layer is duplicated.
 - Declare rules. The IXN rules live in `8_2_interconnect.drc`.
 - Import other `.drc` files.
 
+### Per-method refinement (optional)
+
+Assemblies can mix interconnect *methods* of the active PDK (each die's
+`connection:` selects its method). `--interconnect-methods
+<gds-stem>.ixn_methods.json` scopes the IXN checks per method: the exporter
+derives the file from the `.chiplet`'s per-die connections plus the
+interconnect PDK manifest (the single source of truth for the numbers), and
+the deck checks each method's pitch/spacing on the attachment pads under
+that method's die boundaries (`IXN.b.<method>` / `IXN.e.<method>`). Pads of
+different methods near each other get a conservative cross-method spacing
+(`IXN.x.<m1>.<m2>`, the larger of the two spacings); pads outside every
+method region keep the assembly-global adapter numbers
+(`IXN.b.unclaimed` / `IXN.e.unclaimed`) when an adapter is loaded.
+
+Each method entry MUST carry `IXN_spacing`, `IXN_pitch`, `IXN_pad_size`,
+and `dies` (the boundary-manifest instance names using it); the boundary
+manifest is required in this mode. Without the file, the axis stays
+assembly-global — adapter-only runs are unchanged.
+
 ## Evolving the contract
 
 - New required interposer inputs: bump `config/layers.json`'s version and update
