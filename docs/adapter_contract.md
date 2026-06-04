@@ -13,8 +13,8 @@ interconnect adapter, behaviour is identical to v0.1.0.
 `pdk_adapters/interposer/<basename>.drc`
 
 The runner's `--interposer-adapter <name>` flag takes the *basename*
-(without `.drc` extension). `ihp_sg13g2_interposer` resolves to
-`pdk_adapters/interposer/ihp_sg13g2_interposer.drc`.
+(without `.drc` extension). `intm4tm2` resolves to
+`pdk_adapters/interposer/intm4tm2.drc`.
 
 ### Required abstract inputs
 

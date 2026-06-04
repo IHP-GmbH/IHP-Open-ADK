@@ -38,7 +38,7 @@ docs/                    Architecture, layer registry, adapter contract
 ```bash
 python klayout/drc/run_drc.py \
     --path <design.gds> \
-    --interposer-adapter ihp_sg13g2_interposer \
+    --interposer-adapter intm4tm2 \
     --run_dir /tmp/adk_drc
 ```
 

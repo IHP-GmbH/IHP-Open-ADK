@@ -19,7 +19,7 @@ remains the sole assembly contract.
 ## `orchestrator.py` (`chiplet_kicad_plugin/pipeline/`)
 
 The orchestrator reads each loaded `.chiplet` YAML's
-`interposer.adapter` field (default: `ihp_sg13g2_interposer` for
+`interposer.adapter` field (default: `intm4tm2` for
 backward compatibility) and propagates it to the ADK runner invocation
 as `--interposer-adapter <value>`.
 
@@ -39,7 +39,7 @@ input JSON *and* the active adapter `.drc`.
 ```bash
 python adk/klayout/drc/run_drc.py \
     --path <assembled.gds> \
-    --interposer-adapter ihp_sg13g2_interposer \
+    --interposer-adapter intm4tm2 \
     --run_dir /tmp/adk_drc
 ```
 
