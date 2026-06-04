@@ -45,3 +45,32 @@ python adk/klayout/drc/run_drc.py \
 
 The runner produces a KLayout `.lyrdb` results file under `--run_dir`,
 identical in structure to the interposer-PDK runner's output.
+
+## Ecosystem discovery convention
+
+Cross-repo lookups never use fixed-depth path arithmetic
+(`parents[N]`, `../..`). Every consumer resolves its dependency with
+the same chain, first hit wins:
+
+1. **Environment variable** naming the dependency root.
+2. **KiCad project text variable** of the same name, where a board is
+   in scope (plugin contexts only).
+3. **Upward walk** from the consumer's own file looking for the
+   conventional sibling directory name.
+4. **Loud failure.** If the dependency is required for correctness the
+   tool aborts with the probed locations and the variable to set; a
+   silent degraded mode is only acceptable when the output remains
+   correct without the dependency (e.g. blackbox fallback layer table).
+
+| Variable | Dependency root | Consumers |
+|---|---|---|
+| `ADK_ROOT` | adk/ | plugin DRC step, gds_to_kicad canonical layers |
+| `INTERPOSER_PDK_ROOT` | interposer PDK (`libs.tech/klayout/python/`) | hyp_to_gds Cu-pillar generation |
+| `INTERCONNECT_PDK_ROOT` | interconnect_pdk/ | manifest readers, chiplet-studio fragments, bump3d |
+| `GDS_TO_KICAD_ROOT` | gds_to_kicad/ | bump_mirror PinList import |
+| `KICAD_CHIPLET_PYTHON` | worker interpreter (not a root) | plugin orchestrator |
+
+Precedent for the hard-fail rule: a complete GDS emitted without its
+requested Cu pillars looks fabricable and no downstream DRC can flag
+the absent geometry -- hyp_to_gds therefore aborts when pillars are
+requested and the interposer PDK is unreachable.
