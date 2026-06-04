@@ -131,7 +131,7 @@ def render_assembly_rules(rules: Dict[str, float],
     to a larger generator's output.
 
     The interconnect_* arguments are appended (kwargs with defaults) so existing
-    callers (SP-031) are unaffected. With no interconnect adapter the rendered
+    importers are unaffected. With no interconnect adapter the rendered
     output is byte-identical to before this axis existed: the interconnect block
     is template-guarded on ``interconnect_adapter_name``.
     """

@@ -23,16 +23,18 @@ The orchestrator reads each loaded `.chiplet` YAML's
 backward compatibility) and propagates it to the ADK runner invocation
 as `--interposer-adapter <value>`.
 
-## Gustavo's SP-031 (`interposer/libs.tech/klayout/python/generate_kicad_dru.py`)
+## Downstream DRU generators
 
-His DRU generator `import`s
-`adk.kicad.dru.generate_assembly_dru.render_assembly_rules` and appends
-its output as a `# === ADK assembly rules ===` section to the unified
-`.kicad_dru` it emits. The `--interposer-adapter <name>` flag is
-forwarded.
+A unified per-project DRU generator can `import`
+`adk.kicad.dru.generate_assembly_dru.render_assembly_rules` and append
+its output as a `# === ADK assembly rules ===` section to the
+`.kicad_dru` it emits, forwarding its `--interposer-adapter <name>`
+flag. The function signature is append-only -- new options arrive as
+trailing kwargs with defaults -- so existing importers stay
+source-compatible across ADK releases.
 
-Provenance comments emitted in the unified DRU include sha256 of every
-input JSON *and* the active adapter `.drc`.
+For provenance, importers are encouraged to emit comments carrying the
+sha256 of every input JSON *and* of the active adapter `.drc`.
 
 ## Standalone DRC
 
