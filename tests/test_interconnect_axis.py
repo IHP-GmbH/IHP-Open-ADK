@@ -12,16 +12,25 @@ binaries and no real PDK.
 """
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import klayout.db as kdb
+import pytest
 
 from run_drc import get_rules_with_violations
 
 ADK_ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ADK_ROOT / "klayout" / "drc" / "run_drc.py"
+
+# The runner shells `klayout -b` for the deck itself; on a bare checkout
+# without the KLayout binary (e.g. a CI runner) the whole module skips.
+# The in-image verify gate has the binary and runs everything.
+pytestmark = pytest.mark.skipif(
+    shutil.which("klayout") is None,
+    reason="klayout CLI not on PATH (runner shells `klayout -b`)")
 TEST_ADAPTER = Path(__file__).resolve().parent / "fixtures" / "test_interposer_adapter.drc"
 
 ATTACHMENT_LAYER = (999, 0)  # must match test_interposer_adapter.drc

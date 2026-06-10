@@ -56,6 +56,35 @@ def test_load_manifest_accepts(tmp_path):
     assert core.load_manifest(p)["boundaries"][0]["instance"] == "U1"
 
 
+def test_load_manifest_rejects_wrong_version(tmp_path):
+    m = _manifest([], version="9.9.9")
+    p = tmp_path / "b.boundaries.json"
+    p.write_text(json.dumps(m))
+    with pytest.raises(ValueError) as exc:
+        core.load_manifest(p)
+    msg = str(exc.value)
+    assert "9.9.9" in msg                                # what was found
+    assert core.SUPPORTED_MANIFEST_VERSION in msg        # what is expected
+    assert "egenerate" in msg                            # how to fix it
+
+
+def test_load_manifest_rejects_missing_version(tmp_path):
+    m = _manifest([])
+    del m["version"]
+    p = tmp_path / "b.boundaries.json"
+    p.write_text(json.dumps(m))
+    with pytest.raises(ValueError):
+        core.load_manifest(p)
+
+
+def test_version_constant_matches_runner():
+    """The viewer macro deliberately does not import the runner's module
+    tree, so each keeps its own SUPPORTED_MANIFEST_VERSION copy. This pin
+    keeps the two from drifting apart (see docs/boundary_manifest.md)."""
+    import run_drc  # importable via conftest's RUNNER_DIR sys.path insert
+    assert core.SUPPORTED_MANIFEST_VERSION == run_drc.SUPPORTED_MANIFEST_VERSION
+
+
 # --- rdb structure -----------------------------------------------------------
 
 def test_one_subcategory_per_chiplet():

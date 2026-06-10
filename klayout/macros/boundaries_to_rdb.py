@@ -43,6 +43,12 @@ except ImportError:  # older KLayout binary exposes the API only as `pya`
 DEFAULT_DBU_UM = 0.001
 CATEGORY = "chiplet_boundary"
 
+# Exact-match pin on the manifest version this viewer understands; schema and
+# version policy live in adk/docs/boundary_manifest.md. The runner keeps its
+# own copy (this macro deliberately does not import its module tree) -- a test
+# pins the two constants equal.
+SUPPORTED_MANIFEST_VERSION = "1.0.0"
+
 
 def find_sidecar(layout_path) -> Path:
     """Mirror ``run_drc.resolve_manifest_path``'s auto-discovery rule:
@@ -58,6 +64,13 @@ def load_manifest(path) -> dict:
         raise ValueError(
             f"{path}: not an ADK boundary manifest "
             f"(schema={data.get('schema')!r})")
+    version = data.get("version")
+    if version != SUPPORTED_MANIFEST_VERSION:
+        raise ValueError(
+            f"{path}: boundary-manifest version {version!r} is not supported "
+            f"(this reader expects {SUPPORTED_MANIFEST_VERSION!r}). "
+            f"Regenerate the sidecar with a current hyp_to_gds / "
+            f"blackbox_chiplet, or update the ADK.")
     return data
 
 

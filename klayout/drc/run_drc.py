@@ -7,6 +7,7 @@ See docs/adapter_contract.md for the contract.
 """
 
 import argparse
+import json
 import logging
 import os
 import time
@@ -17,6 +18,13 @@ from subprocess import check_call, CalledProcessError
 from typing import List, Optional, Set, Union
 
 import klayout.db
+
+# Exact-match pin on the boundary-manifest version this runner understands;
+# schema and version policy live in docs/boundary_manifest.md. The viewer
+# macro (klayout/macros/boundaries_to_rdb.py) keeps its own copy because it
+# deliberately does not import this module tree -- a test pins the two
+# constants equal.
+SUPPORTED_MANIFEST_VERSION = "1.0.0"
 
 
 # ================================================================
@@ -180,8 +188,10 @@ def resolve_manifest_path(layout_path: str, manifest_arg: Optional[str],
     otherwise ``<layout-stem>.boundaries.json`` next to the GDS is
     auto-discovered. A missing manifest is a hard error: the runner never
     checks an assembly with no boundary source, which would pass vacuously.
-    In legacy mode the manifest is not used (boundaries come from the GDS
-    exchange0 fab layer).
+    The manifest is also opened and its schema/version validated here, so a
+    stale or foreign sidecar fails before the deck (which JSON-parses it
+    blind) ever runs. In legacy mode the manifest is not used (boundaries
+    come from the GDS exchange0 fab layer).
     """
     if legacy_exchange0:
         return None
@@ -201,6 +211,30 @@ def resolve_manifest_path(layout_path: str, manifest_arg: Optional[str],
             "  - pass --legacy-exchange0 to check a pre-migration GDS that "
             "carries boundaries on the exchange0 fab layer.",
             manifest_path,
+        )
+        exit(1)
+
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        logging.error(
+            "Boundary manifest is not readable JSON: %s\n%s", manifest_path, e)
+        exit(1)
+    if manifest.get("schema") != "adk-boundary-manifest":
+        logging.error(
+            "Not an ADK boundary manifest: %s (schema=%r; expected "
+            "'adk-boundary-manifest'). See docs/boundary_manifest.md.",
+            manifest_path, manifest.get("schema"),
+        )
+        exit(1)
+    if manifest.get("version") != SUPPORTED_MANIFEST_VERSION:
+        logging.error(
+            "Unsupported boundary-manifest version in %s: found %r, this "
+            "runner expects %r.\n"
+            "Regenerate the sidecar with a current hyp_to_gds / "
+            "blackbox_chiplet, or update the ADK. Version policy: "
+            "docs/boundary_manifest.md.",
+            manifest_path, manifest.get("version"), SUPPORTED_MANIFEST_VERSION,
         )
         exit(1)
     return manifest_path

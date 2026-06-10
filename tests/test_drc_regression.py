@@ -5,6 +5,7 @@ fixture and asserts the expected ASM rule set. PDK-independent: uses the
 synthetic adapter at tests/fixtures/test_interposer_adapter.drc.
 """
 
+import json
 import shutil
 import subprocess
 import sys
@@ -12,10 +13,17 @@ from pathlib import Path
 
 import pytest
 
-from run_drc import get_rules_with_violations
+from run_drc import SUPPORTED_MANIFEST_VERSION, get_rules_with_violations
 
 ADK_ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ADK_ROOT / "klayout" / "drc" / "run_drc.py"
+
+# The runner shells `klayout -b` for the deck itself; on a bare checkout
+# without the KLayout binary (e.g. a CI runner) the whole module skips.
+# The in-image verify gate has the binary and runs everything.
+pytestmark = pytest.mark.skipif(
+    shutil.which("klayout") is None,
+    reason="klayout CLI not on PATH (runner shells `klayout -b`)")
 
 
 def _run(layout: Path, adapter: Path, run_dir: Path,
@@ -152,6 +160,48 @@ def test_collision_internal_exchange0_ignored_in_manifest_mode(
         f"Legacy mode reads the overlapping exchange0; expected ASM.a, "
         f"got {sorted(legacy_v)}"
     )
+
+
+def test_runner_rejects_wrong_manifest_version(
+        fixture_layouts, test_adapter, tmp_path):
+    """A sidecar with an unsupported version must abort the runner before the
+    deck runs (never silently interpret stale semantics). The error must name
+    found and expected versions."""
+    gds = tmp_path / "stale.gds"
+    shutil.copy(fixture_layouts["assembly_ok"], gds)
+    sidecar = fixture_layouts["assembly_ok"].with_name(
+        fixture_layouts["assembly_ok"].stem + ".boundaries.json")
+    manifest = json.loads(sidecar.read_text())
+    manifest["version"] = "0.9.0"
+    (tmp_path / "stale.boundaries.json").write_text(json.dumps(manifest))
+
+    report = tmp_path / "report.lyrdb"
+    proc = _run(gds, test_adapter, tmp_path, report)
+    assert proc.returncode != 0, (
+        "Runner must abort on an unsupported manifest version.\n"
+        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+    combined = proc.stdout + proc.stderr
+    assert "0.9.0" in combined, f"Error must name the found version:\n{combined}"
+    assert SUPPORTED_MANIFEST_VERSION in combined, (
+        f"Error must name the expected version:\n{combined}"
+    )
+    assert not report.is_file(), "No report may be produced on abort"
+
+
+def test_runner_rejects_unparseable_manifest(
+        fixture_layouts, test_adapter, tmp_path):
+    """A corrupt sidecar (invalid JSON) must abort the runner loudly, not
+    crash the deck with a Ruby JSON backtrace."""
+    gds = tmp_path / "corrupt.gds"
+    shutil.copy(fixture_layouts["assembly_ok"], gds)
+    (tmp_path / "corrupt.boundaries.json").write_text("{not json")
+
+    report = tmp_path / "report.lyrdb"
+    proc = _run(gds, test_adapter, tmp_path, report)
+    assert proc.returncode != 0
+    combined = (proc.stdout + proc.stderr).lower()
+    assert "json" in combined, f"Error must name the JSON problem:\n{combined}"
 
 
 def test_runner_aborts_without_manifest(fixture_layouts, test_adapter, tmp_path):
