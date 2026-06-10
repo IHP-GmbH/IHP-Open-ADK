@@ -1,0 +1,28 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          # No requirements file in this repo: key the pip cache on the
+          # dependency list below (this file).
+          cache-dependency-path: .github/workflows/tests.yml
+
+      - name: Install dependencies
+        run: pip install pytest klayout PyYAML jinja2
+
+      # The KLayout CLI is not installed on the runner; tests that shell out
+      # to it skip via their skipif markers and run in environments where the
+      # binary is available.
+      - name: Run tests
+        run: pytest tests -q
