@@ -6,6 +6,10 @@ assembly DRC and the boundary viewer: boundaries live in **no fabrication-layer
 namespace**, so the assembly contract stays PDK-agnostic (this is what replaced
 the legacy exchange0 190/0 convention).
 
+The normative JSON Schema lives at
+`config/schema/boundary_manifest.schema.json`; this doc explains it and records
+where the runtime contract is looser than the schema.
+
 ## File location
 
 Written next to the GDS it describes, named after its stem:
@@ -30,40 +34,68 @@ passed instead (`run_drc.py --manifest`, `boundaries_to_rdb.py <manifest.json>`)
 
 ## Schema
 
+What is actually enforced is narrower than what a producer typically writes, so
+"Required" below means *required by the JSON Schema and the consumers*, not
+"always present in real output". The schema requires only `schema`, `version`,
+and `boundaries` at the top level; the consumers check even less. Both readers
+validate `schema` and `version` only (`run_drc.py`, `boundaries_to_rdb.py
+load_manifest`); everything else is read with `.get()` and a default.
+
 Top-level object:
 
 | Field | Required | Type | Meaning |
 |---|---|---|---|
 | `schema` | yes | string | literal `"adk-boundary-manifest"` |
 | `version` | yes | string | exact `"1.0.0"` (see version policy) |
-| `generator` | yes | string | producing tool, for provenance |
-| `assembly_gds` | yes | string | filename of the GDS this sidecar describes |
-| `dbu_um` | yes | number | database unit in microns (typically `0.001`) |
-| `top_cell` | yes | string | top cell the boundaries are placed in |
 | `boundaries` | yes | array | one entry per chiplet; may be empty |
+| `generator` | no | string | producing tool, for provenance |
+| `assembly_gds` | no | string | filename of the GDS this sidecar describes |
 | `assembly_gds_sha256` | no | string | hash of the GDS at write time (staleness hint) |
+| `dbu_um` | no | number | database unit in microns (typically `0.001`); reader default `0.001` |
+| `top_cell` | no | string | top cell the boundaries are placed in; reader default `"TOP"` |
+
+Producers always emit `generator`, `assembly_gds`, `dbu_um`, and `top_cell`, so
+real manifests carry them; they are listed "no" because no consumer fails when
+they are absent.
 
 Each `boundaries[]` entry:
 
 | Field | Required | Type | Meaning |
 |---|---|---|---|
-| `instance` | yes | string | placed-instance name (e.g. `U1`) |
-| `source_die` | yes | string | die/library the instance came from |
-| `class` | yes | string | `"chiplet"` (reserved for future classes) |
-| `polygon_dbu` | yes | array of `[x, y]` int pairs | boundary contour in DBU -- **authoritative** for the DRC |
-| `polygon_um` | no | array of `[x, y]` float pairs | same contour in microns; derived from `polygon_dbu * dbu_um` when absent |
+| `polygon_dbu` | yes | array of `[x, y]` int pairs (>= 3) | boundary contour in DBU; **authoritative** for the DRC |
+| `instance` | no | string | placed-instance name (e.g. `U1`); used as the viewer label |
+| `source_die` | no | string | die/library the instance came from |
+| `class` | no | string | `"chiplet"` (reserved for future classes) |
+| `polygon_um` | no | array of `[x, y]` float pairs (>= 3) | same contour in microns; derived from `polygon_dbu * dbu_um` when absent |
 | `transform` | no | object | placement provenance: `origin_um`, `rotation_deg`, `mirror_x`, `magnification` |
+| `kgd` | no | boolean \| null | declared by the schema, written and read by nobody; see below |
+| `bbox_dbu` | no | array of 4 integers | declared by the schema, written and read by nobody; see below |
+
+`polygon_dbu` is the only per-boundary field the schema requires and the only
+one the DRC deck reads (`layers_def.drc` builds `chiplet_boundary` from it
+unconditionally). `instance`, `source_die`, and `class` are optional even for
+the viewer: `boundaries_to_rdb.py` labels each marker `instance` else
+`source_die` else `boundary_{index}`, and reads `source_die` / `class` with
+`.get()`.
 
 `polygon_dbu` is the authoritative geometry. `polygon_um` and `transform` are
 identity/provenance only; consumers must not let them disagree with
 `polygon_dbu` in any check.
+
+### Vestigial schema fields: `kgd`, `bbox_dbu`
+
+The schema declares `kgd` (`boolean | null`) and `bbox_dbu` (array of 4
+integers) on each boundary, but no producer writes them and no consumer reads
+them. Treat them as reserved/vestigial: they are valid if present and ignored
+either way. Drop them from the schema or wire them into a producer and reader
+before relying on them.
 
 ## Version policy
 
 Readers pin the version with an **exact string match** against `"1.0.0"`; any
 other value (including a missing field) is a hard error, never a warning. A
 stale manifest silently interpreted under new semantics could pass an assembly
-that should fail -- the whole point of the sidecar is that the DRC trusts it.
+that should fail; the whole point of the sidecar is that the DRC trusts it.
 
 When the schema changes, bump `version` in both producers and both reader
 constants in the same change set:
