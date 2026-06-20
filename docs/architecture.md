@@ -26,11 +26,10 @@ The interposer is **just another PDK** from the ADK's point of view. Its
 fabrication rules (`Padc_*`, `TM*`, `TV*`) live inside the interposer repo; the
 ADK never touches them.
 
-A note on versions: the adapter contract and the `config/*.json` registries are
-at **0.2.0** (the interconnect axis landed there), while the package `VERSION`
-file and `README.md` still read `0.1.0` because the package is pre-release. So
-0.2.0 is the contract/config version this doc describes; the package number lags
-it. See `CHANGELOG.md` for what has landed.
+A note on versions: the adapter contract, the `config/*.json` registries, the
+package `VERSION` file, and `README.md` all read **0.2.0** (the interconnect axis
+landed there). The boundary-manifest schema version (`1.0.0`) is a separate,
+independently pinned axis. See `CHANGELOG.md` for what has landed.
 
 ## Abstraction boundary
 
@@ -63,7 +62,7 @@ Chiplet internals are NOT in the assembled GDS; they are represented only by
 `chiplet_boundary`, a mechanical outline carried by the boundary manifest. The
 four current ASM rules treat all chiplets uniformly through `chiplet_boundary`
 and need nothing more: ASM.a (no overlap), ASM.b (min spacing), ASM.e (min area),
-ASM.f (attachment geometry must sit fully inside a chiplet).
+ASM.f (attachment geometry overlapping a chiplet must sit fully inside it).
 
 If a future use case emerges for per-chiplet-type checks (e.g. "chiplet of type X
 must expose its declared bump pattern"), the right mechanism will be designed
@@ -117,9 +116,9 @@ See `adapter_contract.md`, "Per-method refinement".
 `config/rule_params.json` and `config/interconnect.json` are shared between the
 KLayout deck and the KiCad DRU generator: both read these registries and apply
 adapter overrides identically, so the two toolchains agree on what they are
-checking. `config/layers.json` is **legacy-compat only**; the deck reads it just
-on the `--legacy-exchange0` path for pre-migration GDS, and the KiCad generator
-does not read it at all.
+checking. `config/layers.json` is **legacy-compat only**; the deck always loads
+it but only consults its `exchange0` entry on the `--legacy-exchange0` path for
+pre-migration GDS, and the KiCad generator does not read it at all.
 
 The chiplet boundary is carried by a per-assembly manifest
 (`config/schema/boundary_manifest.schema.json`) that producers (`hyp_to_gds.py`,

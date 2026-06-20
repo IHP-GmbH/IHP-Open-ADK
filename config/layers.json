@@ -6,11 +6,6 @@
             "gds_layer": 190,
             "gds_datatype": 0,
             "purpose": "Legacy fabrication-layer location of the chiplet boundary (IHP SG13G2 Exchange0, 190/0). Read only by layers_def.drc in --legacy-exchange0 compat mode. The default boundary source is the boundary manifest."
-        },
-        "exchange1": {
-            "gds_layer": 191,
-            "gds_datatype": 0,
-            "purpose": "Unused. Historically a reserved second exchange slot; no longer consumed by the deck."
         }
     }
 }

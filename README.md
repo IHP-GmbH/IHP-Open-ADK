@@ -7,7 +7,7 @@ chiplet dies remain ordinary PDKs.
 
 ## Status
 
-`v0.1.0`. The KLayout assembly DRC, its runner, the KiCad DRU generator, and the
+`v0.2.0`. The KLayout assembly DRC, its runner, the KiCad DRU generator, and the
 IHP interposer adapter are implemented and exercised by the regression suite.
 The migration out of the interposer-coupled implementation is still settling, so
 expect the layer registry and rule set to keep moving. See `docs/architecture.md`

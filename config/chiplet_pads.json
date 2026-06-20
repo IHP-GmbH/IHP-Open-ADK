@@ -1,6 +1,6 @@
 {
     "description": "ADK chiplet-internal pad layer vocabulary. The CANONICAL layers the black-box generator emits and that gds_to_kicad's generic.lyp assumes by default, for chiplets from commercial / closed PDK nodes that ship only metal pads + pad names with no .lyp. Distinct from config/layers.json, which is the assembly/exchange registry. The INPUT side (reading an arbitrary commercial pads-only GDS whose layer numbers are unknown) never consults this file; it is handled by --pad-layer-number or densest-layer auto-detect. Layer numbers 205/206 are deliberately chosen in a band the reference interposer PDK leaves free (IHP SG13G2 uses the Exchange family 190-194 and layer 257, so 195-256 is unassigned), so a black-box chiplet's synthetic pad/outline geometry does not alias real interposer fab layers in an assembled GDS. A guard test (gds_to_kicad/tests/test_pad_layer_pdk_collision.py) pins this against the IHP layer set.",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "layers": {
         "pad_drawing": {
             "gds_layer": 205,

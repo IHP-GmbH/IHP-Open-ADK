@@ -34,10 +34,6 @@ Historical fabrication-layer location of the boundary. Read by
 `legacy_exchange0` set (runner flag `--legacy-exchange0`), to check a
 pre-migration GDS that still carries boundaries on `190/0`.
 
-## exchange1 (191 / 0): unused
-
-Historically a reserved second exchange slot; no longer consumed by the deck.
-
 ## Consumers
 
 - `klayout/drc/adk_assembly.drc`: parses the manifest and injects it.

@@ -160,6 +160,6 @@ adapter-only runs are unchanged.
 - **Versioning.** The interconnect axis is additive: runs without an
   interconnect adapter, and interposer adapters with no interconnect
   counterpart, behave exactly as the pre-interconnect deck. See `CHANGELOG.md`
-  for the per-release contract history. Note the repo's version strings are
-  currently inconsistent (the `VERSION` file and `config/*.json` `version` keys
-  do not all match); treat `CHANGELOG.md` as the authoritative record.
+  for the per-release contract history. The `VERSION` file and the `config/*.json`
+  `version` keys all track the latest released `CHANGELOG.md` entry (currently
+  `0.2.0`); `CHANGELOG.md` remains the authoritative record.

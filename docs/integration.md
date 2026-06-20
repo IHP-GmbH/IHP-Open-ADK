@@ -28,11 +28,13 @@ present:
 - **Interposer.** `interposer.adapter` (default `intm4tm2` for backward
   compatibility) becomes `--interposer-adapter <value>`. Always emitted.
 - **Interconnect.** `interconnect.adapter` (default `""`, meaning no
-  interconnect axis) becomes `--interconnect-adapter <value>`, and the
-  per-method file becomes `--interconnect-methods <path>`. Emitted only when
-  an adapter is declared, so a legacy design never silently gains the IXN
-  pitch/spacing checks. This axis is configured by `config/interconnect.json`
-  (schema v0.2.0).
+  interconnect axis) becomes `--interconnect-adapter <value>`, emitted only when
+  an adapter is declared, so a legacy design never silently gains the
+  assembly-global IXN pitch/spacing checks. The per-method file is emitted
+  independently as `--interconnect-methods <path>` whenever the exporter derives
+  a per-method sidecar; either flag activates the IXN axis (the deck appends
+  `8_2_interconnect.drc` when an interconnect adapter or a methods file is
+  present). This axis is configured by `config/interconnect.json` (schema v0.2.0).
 
 ## Downstream DRU generators
 
