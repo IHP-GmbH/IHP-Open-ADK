@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Render the chiplet boundary manifest as a KLayout report database (.lyrdb).
 
 This is the *viewer* half of the boundary contract. The ADK assembly DRC
@@ -19,10 +20,11 @@ Two entry points share ``build_rdb``:
 * **GUI** -- the ``show_boundaries.lym`` macro builds the same database in memory
   and shows it in the current layout view (one click, no file to load).
 
-Coordinates: markers use ``polygon_um`` (microns). A KLayout RDB value carries
-micron user units, so ``polygon_dbu`` would render 1000x too large. ``polygon_um``
-is optional in the schema, so it is derived from ``polygon_dbu * dbu_um`` when the
-producer omitted it.
+Coordinates: markers use ``polygon_um`` (microns). ``polygon_dbu`` is the
+authoritative geometry the DRC checks, so it is rendered as the source of truth
+(``polygon_dbu * dbu_um``); ``polygon_um`` is only a fallback for a manifest
+that omits ``polygon_dbu`` (it is optional in the viewer). A KLayout RDB value
+carries micron user units, so raw ``polygon_dbu`` would render 1000x too large.
 """
 from __future__ import annotations
 
@@ -60,6 +62,9 @@ def find_sidecar(layout_path) -> Path:
 
 def load_manifest(path) -> dict:
     data = json.loads(Path(path).read_text())
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"{path}: not a JSON object (got {type(data).__name__})")
     if data.get("schema") != "adk-boundary-manifest":
         raise ValueError(
             f"{path}: not an ADK boundary manifest "
@@ -75,11 +80,18 @@ def load_manifest(path) -> dict:
 
 
 def _polygon_um(boundary: dict, dbu_um: float) -> List[Tuple[float, float]]:
-    """Boundary contour in microns. Prefer ``polygon_um``; derive it from
-    ``polygon_dbu`` when the producer omitted it (it is optional)."""
-    if boundary.get("polygon_um"):
-        return [(float(x), float(y)) for x, y in boundary["polygon_um"]]
-    return [(x * dbu_um, y * dbu_um) for x, y in boundary["polygon_dbu"]]
+    """Boundary contour in microns. ``polygon_dbu`` is authoritative for the
+    DRC, so derive the microns from it (``polygon_dbu * dbu_um``) to show
+    exactly what the DRC injects; fall back to ``polygon_um`` only when
+    ``polygon_dbu`` is absent. Returns [] when neither is present (the caller
+    skips it rather than crashing)."""
+    poly_dbu = boundary.get("polygon_dbu")
+    if poly_dbu:
+        return [(x * dbu_um, y * dbu_um) for x, y in poly_dbu]
+    poly_um = boundary.get("polygon_um")
+    if poly_um:
+        return [(float(x), float(y)) for x, y in poly_um]
+    return []
 
 
 def _label(boundary: dict, index: int) -> str:
@@ -105,12 +117,22 @@ def build_rdb(manifest: dict) -> "_krdb.ReportDatabase":
                        "(viewer-only; read by no DRC rule)")
     dbu_um = float(manifest.get("dbu_um") or DEFAULT_DBU_UM)
 
-    for i, b in enumerate(manifest.get("boundaries", [])):
+    used_names = set()
+    for i, b in enumerate(manifest.get("boundaries") or []):
+        if not isinstance(b, dict):
+            continue
         pts = _polygon_um(b, dbu_um)
         if len(pts) < 3:
             continue
         label = _label(b, i)
-        sub = r.create_category(root, _safe(label))
+        # Distinct instances that sanitize to the same name ('U3.A' and 'U3/A'
+        # both -> 'U3_A') must not be merged into one sub-category; suffix the
+        # boundary index (unique) to keep them separate.
+        safe = _safe(label)
+        if safe in used_names:
+            safe = f"{safe}_{i}"
+        used_names.add(safe)
+        sub = r.create_category(root, safe)
         src = b.get("source_die")
         cls = b.get("class")
         desc = " / ".join(x for x in (src, cls) if x)
@@ -158,12 +180,15 @@ def main(argv: Optional[list] = None) -> int:
     args = ap.parse_args(argv)
     try:
         manifest, default_out = _resolve_input(args.input)
-    except (FileNotFoundError, ValueError) as e:
+        out = Path(args.output) if args.output else default_out
+        write_lyrdb(manifest, out)
+    except (FileNotFoundError, ValueError, KeyError, TypeError, OSError,
+            RuntimeError) as e:
+        # KLayout's ReportDatabase.save() raises RuntimeError (not OSError) when
+        # the -o path is unwritable / its parent is missing, so catch it too.
         print(f"error: {e}", file=sys.stderr)
         return 1
-    out = Path(args.output) if args.output else default_out
-    write_lyrdb(manifest, out)
-    n = len(manifest.get("boundaries", []))
+    n = len(manifest.get("boundaries") or [])
     print(f"Wrote {out} ({n} boundar{'y' if n == 1 else 'ies'}).")
     print(f"In KLayout: open the GDS, then Tools > Marker Browser and load "
           f"'{out.name}'.")
