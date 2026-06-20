@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """
 ADK assembly DRC runner.
 
@@ -10,11 +11,12 @@ import argparse
 import json
 import logging
 import os
+import subprocess
+import sys
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
-from subprocess import check_call, CalledProcessError
 from typing import List, Optional, Set, Union
 
 import klayout.db
@@ -25,6 +27,12 @@ import klayout.db
 # deliberately does not import this module tree -- a test pins the two
 # constants equal.
 SUPPORTED_MANIFEST_VERSION = "1.0.0"
+
+# Exact-match pin on the per-method interconnect (ixn_methods) sidecar version.
+# Mirrors the boundary-manifest version policy: a stale or foreign methods file
+# is rejected here before the deck (which JSON-parses it blind) ever runs.
+# Schema: config/schema/ixn_methods.schema.json.
+SUPPORTED_IXN_METHODS_VERSION = "1.0.0"
 
 
 # ================================================================
@@ -46,9 +54,16 @@ def get_rules_with_violations(results_database: Union[str, Path]) -> Set[str]:
         logging.error(f"Failed to parse results database: {results_database}")
         raise e
 
+    # Address the <items> element and each <item>'s <category> by tag rather
+    # than by fixed position: a truncated/partially-written .lyrdb, or a
+    # KLayout build that reorders or omits a top-level element, must not raise
+    # an IndexError here. A report with no <items> yields an empty set.
     violating_rules = set()
-    for rule in root[7]:  # root[7] : List rules with violations
-        violating_rules.add(f"{rule[1].text}".replace("'", ""))
+    items = root.find("items")
+    for item in (items if items is not None else []):
+        category = item.find("category")
+        if category is not None and category.text:
+            violating_rules.add(category.text.replace("'", ""))
 
     return violating_rules
 
@@ -61,21 +76,37 @@ def get_rules_with_violations(results_database: Union[str, Path]) -> Set[str]:
 def get_top_cell_names(gds_path: str) -> List[str]:
     """Get top cell names from a GDS file."""
     layout = klayout.db.Layout()
-    layout.read(gds_path)
+    try:
+        layout.read(gds_path)
+    except Exception as e:
+        # check_layout_path only validated the extension, not the content; a
+        # file that ends in .gds but is not a valid stream raises here. Fail
+        # with a clean message instead of a raw KLayout traceback.
+        logging.error(f"Could not read layout '{gds_path}': {e}")
+        sys.exit(1)
     return [t.name for t in layout.top_cells()]
 
 
 def check_klayout_version():
     """Check that KLayout >= 0.29.11 is available."""
     try:
-        klayout_version_output = os.popen("klayout -b -v").read().strip()
-    except Exception as e:
-        logging.error(f"Error while checking KLayout version: {e}")
-        exit(1)
-
-    if not klayout_version_output:
+        result = subprocess.run(
+            ["klayout", "-b", "-v"], capture_output=True, text=True
+        )
+    except FileNotFoundError:
         logging.error("KLayout not found. Make sure it is installed and in PATH.")
-        exit(1)
+        sys.exit(1)
+    except OSError as e:
+        logging.error(f"Error while checking KLayout version: {e}")
+        sys.exit(1)
+
+    klayout_version_output = (result.stdout or "").strip()
+    if not klayout_version_output:
+        logging.error(
+            "KLayout did not report a version. Make sure it is installed and "
+            "in PATH. (stderr: %s)", (result.stderr or "").strip()
+        )
+        sys.exit(1)
 
     version_str = klayout_version_output.split()[-1]
     version_parts = version_str.split(".")
@@ -86,11 +117,11 @@ def check_klayout_version():
         patch = int(version_parts[2]) if len(version_parts) > 2 else 0
     except ValueError:
         logging.error(f"Failed to parse KLayout version: '{klayout_version_output}'")
-        exit(1)
+        sys.exit(1)
 
     if (major, minor, patch) < (0, 29, 11):
         logging.error(f"Minimum KLayout version is 0.29.11. Found: {version_str}")
-        exit(1)
+        sys.exit(1)
 
     logging.info(f"KLayout version: {version_str}")
 
@@ -101,11 +132,11 @@ def check_layout_path(layout_path: str) -> str:
 
     if not path.is_file():
         logging.error(f"Layout file '{layout_path}' does not exist.")
-        exit(1)
+        sys.exit(1)
 
     if not layout_path.lower().endswith((".gds", ".gds.gz", ".gds2", ".gds2.gz", ".oas")):
         logging.error(f"Layout '{layout_path}' is not GDS or OAS format.")
-        exit(1)
+        sys.exit(1)
 
     return str(path.resolve())
 
@@ -118,10 +149,10 @@ def get_run_top_cell_name(topcell_arg: str, layout_path: str) -> str:
     top_cells = get_top_cell_names(layout_path)
     if len(top_cells) > 1:
         logging.error("Layout has multiple top cells. Specify one with --topcell.")
-        exit(1)
+        sys.exit(1)
     elif not top_cells:
         logging.error("No top cell found in layout.")
-        exit(1)
+        sys.exit(1)
     return top_cells[0]
 
 
@@ -135,49 +166,72 @@ _ADAPTER_DIR = _ADK_ROOT / "pdk_adapters" / "interposer"
 _INTERCONNECT_ADAPTER_DIR = _ADK_ROOT / "pdk_adapters" / "interconnect"
 
 
-def resolve_adapter(name_or_path: str) -> str:
-    """Resolve a --interposer-adapter argument to an absolute .drc path.
+def _resolve_adapter(name_or_path: str, search_dir: Path, kind: str) -> str:
+    """Resolve an adapter argument to an absolute .drc path.
 
-    Accepts either a shortname (resolved against pdk_adapters/interposer/) or
-    an explicit path to a .drc file.
+    Accepts either a shortname (resolved against ``search_dir``) or an explicit
+    path to a .drc file. ``kind`` (e.g. "Interposer") names the axis in the
+    error message.
     """
     candidate = Path(name_or_path)
     if candidate.suffix == ".drc" and candidate.is_file():
         return str(candidate.resolve())
 
     shortname = name_or_path[:-4] if name_or_path.endswith(".drc") else name_or_path
-    adapter_path = _ADAPTER_DIR / f"{shortname}.drc"
+    adapter_path = search_dir / f"{shortname}.drc"
     if adapter_path.is_file():
         return str(adapter_path.resolve())
 
     logging.error(
-        f"Interposer adapter not found: '{name_or_path}'. "
+        f"{kind} adapter not found: '{name_or_path}'. "
         f"Looked for the literal path and for '{adapter_path}'."
     )
-    exit(1)
+    sys.exit(1)
+
+
+def resolve_adapter(name_or_path: str) -> str:
+    """Resolve a --interposer-adapter argument to an absolute .drc path."""
+    return _resolve_adapter(name_or_path, _ADAPTER_DIR, "Interposer")
 
 
 def resolve_interconnect_adapter(name_or_path: str) -> str:
-    """Resolve a --interconnect-adapter argument to an absolute .drc path.
+    """Resolve a --interconnect-adapter argument to an absolute .drc path."""
+    return _resolve_adapter(name_or_path, _INTERCONNECT_ADAPTER_DIR, "Interconnect")
 
-    Parallel to resolve_adapter() but for the optional interconnect axis.
-    Accepts a shortname (resolved against pdk_adapters/interconnect/) or an
-    explicit path to a .drc file.
+
+def _validate_boundary_structure(manifest: dict, manifest_path: Path) -> None:
+    """Validate the boundary entries the deck consumes so a version-valid but
+    structurally malformed sidecar fails here with a readable message instead
+    of as a Ruby backtrace inside the deck (layers_def.drc reads polygon_dbu
+    blind). Mirrors config/schema/boundary_manifest.schema.json without a
+    jsonschema dependency: 'boundaries' must be a list, and each entry must
+    carry a 'polygon_dbu' of >= 3 [x, y] integer pairs.
     """
-    candidate = Path(name_or_path)
-    if candidate.suffix == ".drc" and candidate.is_file():
-        return str(candidate.resolve())
-
-    shortname = name_or_path[:-4] if name_or_path.endswith(".drc") else name_or_path
-    adapter_path = _INTERCONNECT_ADAPTER_DIR / f"{shortname}.drc"
-    if adapter_path.is_file():
-        return str(adapter_path.resolve())
-
-    logging.error(
-        f"Interconnect adapter not found: '{name_or_path}'. "
-        f"Looked for the literal path and for '{adapter_path}'."
-    )
-    exit(1)
+    boundaries = manifest.get("boundaries")
+    if not isinstance(boundaries, list):
+        logging.error(
+            "Boundary manifest %s: 'boundaries' must be a list (got %s). "
+            "See docs/boundary_manifest.md.",
+            manifest_path, type(boundaries).__name__,
+        )
+        sys.exit(1)
+    for i, b in enumerate(boundaries):
+        if not isinstance(b, dict):
+            logging.error(
+                "Boundary manifest %s: boundaries[%d] is not an object.",
+                manifest_path, i,
+            )
+            sys.exit(1)
+        poly = b.get("polygon_dbu")
+        if (not isinstance(poly, list) or len(poly) < 3 or not all(
+                isinstance(p, (list, tuple)) and len(p) == 2 for p in poly)):
+            logging.error(
+                "Boundary manifest %s: boundaries[%d].polygon_dbu must be a "
+                "list of >= 3 [x, y] pairs (the DRC reads it directly). "
+                "See docs/boundary_manifest.md.",
+                manifest_path, i,
+            )
+            sys.exit(1)
 
 
 def resolve_manifest_path(layout_path: str, manifest_arg: Optional[str],
@@ -188,12 +242,18 @@ def resolve_manifest_path(layout_path: str, manifest_arg: Optional[str],
     otherwise ``<layout-stem>.boundaries.json`` next to the GDS is
     auto-discovered. A missing manifest is a hard error: the runner never
     checks an assembly with no boundary source, which would pass vacuously.
-    The manifest is also opened and its schema/version validated here, so a
-    stale or foreign sidecar fails before the deck (which JSON-parses it
-    blind) ever runs. In legacy mode the manifest is not used (boundaries
-    come from the GDS exchange0 fab layer).
+    The manifest is also opened and its schema/version/structure validated
+    here, so a stale, foreign, or malformed sidecar fails before the deck
+    (which JSON-parses it blind) ever runs. In legacy mode the manifest is not
+    used (boundaries come from the GDS exchange0 fab layer).
     """
     if legacy_exchange0:
+        if manifest_arg:
+            logging.warning(
+                "--manifest %s is ignored in --legacy-exchange0 mode "
+                "(boundaries come from the GDS exchange0 fab layer).",
+                manifest_arg,
+            )
         return None
 
     if manifest_arg:
@@ -212,21 +272,28 @@ def resolve_manifest_path(layout_path: str, manifest_arg: Optional[str],
             "carries boundaries on the exchange0 fab layer.",
             manifest_path,
         )
-        exit(1)
+        sys.exit(1)
 
     try:
         manifest = json.loads(manifest_path.read_text())
     except (OSError, json.JSONDecodeError) as e:
         logging.error(
             "Boundary manifest is not readable JSON: %s\n%s", manifest_path, e)
-        exit(1)
+        sys.exit(1)
+    if not isinstance(manifest, dict):
+        logging.error(
+            "Boundary manifest is not a JSON object: %s (got %s). See "
+            "docs/boundary_manifest.md.",
+            manifest_path, type(manifest).__name__,
+        )
+        sys.exit(1)
     if manifest.get("schema") != "adk-boundary-manifest":
         logging.error(
             "Not an ADK boundary manifest: %s (schema=%r; expected "
             "'adk-boundary-manifest'). See docs/boundary_manifest.md.",
             manifest_path, manifest.get("schema"),
         )
-        exit(1)
+        sys.exit(1)
     if manifest.get("version") != SUPPORTED_MANIFEST_VERSION:
         logging.error(
             "Unsupported boundary-manifest version in %s: found %r, this "
@@ -236,8 +303,48 @@ def resolve_manifest_path(layout_path: str, manifest_arg: Optional[str],
             "docs/boundary_manifest.md.",
             manifest_path, manifest.get("version"), SUPPORTED_MANIFEST_VERSION,
         )
-        exit(1)
+        sys.exit(1)
+    _validate_boundary_structure(manifest, manifest_path)
     return manifest_path
+
+
+def resolve_ixn_methods_path(methods_arg: str) -> Path:
+    """Resolve and validate the per-method interconnect sidecar (fail-loud).
+
+    Mirrors resolve_manifest_path's policy: the file must exist and carry the
+    expected schema string and exact version, so a stale or foreign methods
+    file is rejected here before the deck (which reads it blind) ever runs.
+    Per-method numeric keys are further validated by the deck.
+    """
+    methods_path = Path(methods_arg).resolve()
+    if not methods_path.is_file():
+        logging.error("Interconnect methods file not found: %s", methods_path)
+        sys.exit(1)
+    try:
+        methods = json.loads(methods_path.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        logging.error(
+            "Interconnect methods file is not readable JSON: %s\n%s",
+            methods_path, e)
+        sys.exit(1)
+    if not isinstance(methods, dict):
+        logging.error(
+            "Interconnect methods file is not a JSON object: %s (got %s).",
+            methods_path, type(methods).__name__)
+        sys.exit(1)
+    if methods.get("schema") != "adk-ixn-methods":
+        logging.error(
+            "Not an ADK interconnect-methods file: %s (schema=%r; expected "
+            "'adk-ixn-methods').", methods_path, methods.get("schema"))
+        sys.exit(1)
+    if methods.get("version") != SUPPORTED_IXN_METHODS_VERSION:
+        logging.error(
+            "Unsupported interconnect-methods version in %s: found %r, this "
+            "runner expects %r. Regenerate the sidecar with a current "
+            "exporter, or update the ADK.",
+            methods_path, methods.get("version"), SUPPORTED_IXN_METHODS_VERSION)
+        sys.exit(1)
+    return methods_path
 
 
 # ================================================================
@@ -266,22 +373,27 @@ def run_assembly_drc(layout_path: str, adapter_path: str, topcell: str,
     if report_path is None:
         report_path = run_dir / f"{layout_stem}_{topcell}_assembly.lyrdb"
 
-    cmd = (
-        f"klayout -b -r '{drc_script}'"
-        f" -rd input='{layout_path}'"
-        f" -rd adapter='{adapter_path}'"
-        f" -rd report='{report_path}'"
-        f" -rd topcell='{topcell}'"
-        f" -rd threads={threads}"
-        f" -rd run_mode='{run_mode}'"
-        f" -rd legacy_exchange0={'true' if legacy_exchange0 else 'false'}"
-    )
+    # Build an argv list (shell=False): KLayout receives each `-rd key=value`
+    # as a single token, so paths/topcell with spaces, quotes, or shell
+    # metacharacters are passed verbatim with no quoting and no injection
+    # surface (topcell can come straight from an untrusted GDS top-cell name).
+    cmd = [
+        "klayout", "-b",
+        "-r", drc_script,
+        "-rd", f"input={layout_path}",
+        "-rd", f"adapter={adapter_path}",
+        "-rd", f"report={report_path}",
+        "-rd", f"topcell={topcell}",
+        "-rd", f"threads={threads}",
+        "-rd", f"run_mode={run_mode}",
+        "-rd", f"legacy_exchange0={'true' if legacy_exchange0 else 'false'}",
+    ]
     if manifest_path is not None:
-        cmd += f" -rd manifest='{manifest_path}'"
+        cmd += ["-rd", f"manifest={manifest_path}"]
     if interconnect_adapter_path is not None:
-        cmd += f" -rd interconnect_adapter='{interconnect_adapter_path}'"
+        cmd += ["-rd", f"interconnect_adapter={interconnect_adapter_path}"]
     if interconnect_methods_path is not None:
-        cmd += f" -rd interconnect_methods='{interconnect_methods_path}'"
+        cmd += ["-rd", f"interconnect_methods={interconnect_methods_path}"]
 
     logging.info(
         f"Running assembly DRC on {Path(layout_path).name} "
@@ -290,8 +402,8 @@ def run_assembly_drc(layout_path: str, adapter_path: str, topcell: str,
     logging.debug(f"Command: {cmd}")
 
     try:
-        check_call(cmd, shell=True)
-    except CalledProcessError as e:
+        subprocess.check_call(cmd)
+    except subprocess.CalledProcessError as e:
         logging.error(f"Assembly DRC failed with exit code {e.returncode}")
         raise
 
@@ -302,7 +414,7 @@ def check_drc_results(report_path: Path) -> Set[str]:
     """Parse the report and log a pass/fail banner. Returns the rule set."""
     if not report_path.is_file():
         logging.error(f"Result database not generated: {report_path}")
-        exit(1)
+        sys.exit(1)
 
     violating_rules = get_rules_with_violations(report_path)
 
@@ -423,6 +535,18 @@ def main():
 
     time_start = time.time()
 
+    # Per-method interconnect maps method ids to die instance names from the
+    # boundary manifest, so it is meaningless in legacy mode (no manifest).
+    # Reject the combination here with a clean message instead of letting the
+    # deck raise it after a full KLayout spawn.
+    if args.interconnect_methods and args.legacy_exchange0:
+        logging.error(
+            "--interconnect-methods requires the boundary manifest and cannot "
+            "be combined with --legacy-exchange0 (legacy mode carries no "
+            "per-die instance names)."
+        )
+        sys.exit(1)
+
     check_klayout_version()
     layout_path = check_layout_path(args.path)
     topcell = get_run_top_cell_name(args.topcell, layout_path)
@@ -431,29 +555,34 @@ def main():
         resolve_interconnect_adapter(args.interconnect_adapter)
         if args.interconnect_adapter else None
     )
-    interconnect_methods_path = None
-    if args.interconnect_methods:
-        interconnect_methods_path = Path(args.interconnect_methods).resolve()
-        if not interconnect_methods_path.is_file():
-            logging.error(
-                "Interconnect methods file not found: %s",
-                interconnect_methods_path,
-            )
-            exit(1)
+    interconnect_methods_path = (
+        resolve_ixn_methods_path(args.interconnect_methods)
+        if args.interconnect_methods else None
+    )
     manifest_path = resolve_manifest_path(
         layout_path, args.manifest, args.legacy_exchange0
     )
 
     report_path = Path(args.report).resolve() if args.report else None
-    report = run_assembly_drc(
-        layout_path, adapter_path, topcell, run_dir,
-        threads=args.threads, run_mode=args.run_mode,
-        report_path=report_path,
-        manifest_path=manifest_path,
-        legacy_exchange0=args.legacy_exchange0,
-        interconnect_adapter_path=interconnect_adapter_path,
-        interconnect_methods_path=interconnect_methods_path,
-    )
+    try:
+        report = run_assembly_drc(
+            layout_path, adapter_path, topcell, run_dir,
+            threads=args.threads, run_mode=args.run_mode,
+            report_path=report_path,
+            manifest_path=manifest_path,
+            legacy_exchange0=args.legacy_exchange0,
+            interconnect_adapter_path=interconnect_adapter_path,
+            interconnect_methods_path=interconnect_methods_path,
+        )
+    except subprocess.CalledProcessError as e:
+        # The deck (klayout) exited non-zero: an adapter missing a required
+        # input, a deck raise, etc. The KLayout error is already on stderr and
+        # run_assembly_drc logged a one-line banner; exit cleanly with the
+        # deck's code instead of dumping a Python traceback. Exit codes:
+        # 0 = clean, 1 = violations (the normal path below); a deck/tooling
+        # failure surfaces as klayout's own non-zero code (or 2 as a fallback).
+        return e.returncode or 2
+
     violations = check_drc_results(report)
 
     elapsed = time.time() - time_start
@@ -463,4 +592,4 @@ def main():
 
 
 if __name__ == "__main__":
-    exit(main())
+    sys.exit(main())

@@ -1,0 +1,31 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://heterogenic-chip-design-project/adk/config/schema/ixn_methods.schema.json",
+    "title": "ADK per-method interconnect (IXN) sidecar",
+    "description": "Sidecar emitted next to an assembly GDS (<gds-stem>.ixn_methods.json) by the exporter from the .chiplet's per-die connections and the interconnect PDK manifest. Scopes the IXN pitch/spacing checks per method: each method's numbers run on the attachment pads under ITS dies' boundaries (resolved against the boundary manifest's instances). Consumed by the ADK assembly DRC (run_drc.py validates schema+version; adk_assembly.drc reads 'methods').",
+    "type": "object",
+    "required": ["schema", "version", "methods"],
+    "properties": {
+        "schema": { "const": "adk-ixn-methods" },
+        "version": { "type": "string" },
+        "assembly_gds": { "type": "string" },
+        "methods": {
+            "type": "object",
+            "description": "method id -> per-method pitch/spacing numbers and the die instances using it.",
+            "additionalProperties": {
+                "type": "object",
+                "required": ["IXN_spacing", "IXN_pitch", "IXN_pad_size", "dies"],
+                "properties": {
+                    "IXN_spacing": { "type": "number", "exclusiveMinimum": 0 },
+                    "IXN_pitch": { "type": "number", "exclusiveMinimum": 0 },
+                    "IXN_pad_size": { "type": "number", "exclusiveMinimum": 0 },
+                    "dies": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "minItems": 1
+                    }
+                }
+            }
+        }
+    }
+}
