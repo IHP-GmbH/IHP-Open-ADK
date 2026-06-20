@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """ADK test harness fixtures.
 
 Synthesizes the minimal GDS layouts that exercise each ASM rule on demand,

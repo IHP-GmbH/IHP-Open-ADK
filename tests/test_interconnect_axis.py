@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """ADK interconnect-axis (IXN) regression tests.
 
 Exercises the optional second adapter axis. With --interconnect-adapter the
@@ -271,3 +272,53 @@ def test_per_method_unclaimed_pads_use_adapter_numbers(tmp_path):
     v = _violations(gds, tmp_path / "run_noadapter",
                     interconnect_methods=methods)
     assert not any(r.startswith("IXN.b.unclaimed") for r in v), f"got {sorted(v)}"
+
+
+# ---------------------------------------------------------------------------
+# Third shipped adapter coverage + new fail-loud deck guards
+# ---------------------------------------------------------------------------
+
+def test_ihp_sbump_flags_close_pads(tmp_path):
+    """ihp_sbump (70 um spacing / 130 um pitch / 60 um pad) flags pads 20 um
+    apart. The third shipped interconnect adapter, previously untested in DRC."""
+    gds = tmp_path / "close_pads.gds"
+    _build_close_pads_gds(gds)
+    v = _violations(gds, tmp_path / "run", interconnect_adapter="ihp_sbump")
+    assert "IXN.b" in v, f"Expected IXN.b under ihp_sbump, got {sorted(v)}"
+    assert "IXN.e" in v, f"Expected IXN.e under ihp_sbump, got {sorted(v)}"
+
+
+def _single_pad_gds(out: Path):
+    ly = kdb.Layout()
+    ly.dbu = 0.001
+    top = ly.create_cell("TOP")
+    pad = ly.layer(*ATTACHMENT_LAYER)
+    top.shapes(pad).insert(kdb.Box(_um(100), _um(100), _um(140), _um(140)))
+    ly.write(str(out))
+
+
+def test_per_method_unknown_die_aborts(tmp_path):
+    """A method referencing a die instance absent from the boundary manifest
+    must fail loud, not silently drop that die's pads from its region."""
+    gds = tmp_path / "u.gds"
+    _single_pad_gds(gds)
+    methods = _write_sidecars(gds, [_boundary("U1", 0, 0, 500, 500)],
+                              {"m": dict(FINE, dies=["U_MISSING"])})
+    report = tmp_path / "run" / "report.lyrdb"
+    proc = _run(gds, tmp_path / "run", report, interconnect_methods=methods)
+    assert proc.returncode != 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    assert "U_MISSING" in (proc.stdout + proc.stderr)
+
+
+def test_per_method_pitch_not_exceeding_pad_aborts(tmp_path):
+    """A method whose IXN_pitch <= IXN_pad_size yields a non-positive
+    pitch->space threshold; the deck must reject it, not silently no-op."""
+    gds = tmp_path / "p.gds"
+    _single_pad_gds(gds)
+    bad = {"IXN_spacing": 40.0, "IXN_pitch": 30.0, "IXN_pad_size": 35.0,
+           "dies": ["U1"]}
+    methods = _write_sidecars(gds, [_boundary("U1", 0, 0, 500, 500)], {"m": bad})
+    report = tmp_path / "run" / "report.lyrdb"
+    proc = _run(gds, tmp_path / "run", report, interconnect_methods=methods)
+    assert proc.returncode != 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    assert "must exceed" in (proc.stdout + proc.stderr)

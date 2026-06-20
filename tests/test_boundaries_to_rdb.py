@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for boundaries_to_rdb: manifest -> KLayout .lyrdb marker database.
 
 The viewer's core/CLI is fully testable headless via the standalone klayout
@@ -180,3 +181,13 @@ def test_cli_writes_lyrdb(tmp_path):
 
 def test_cli_bad_input_returns_1(tmp_path):
     assert core.main([str(tmp_path / "missing.gds")]) == 1
+
+
+def test_cli_unwritable_output_returns_1(tmp_path):
+    # KLayout's ReportDatabase.save() raises RuntimeError (not OSError) when the
+    # -o parent dir is missing; main() must convert it to a clean error + 1.
+    (tmp_path / "x.boundaries.json").write_text(json.dumps(
+        _manifest([{"instance": "U1", "polygon_um": [[0, 0], [10, 0], [10, 10]]}])))
+    rc = core.main([str(tmp_path / "x.gds"),
+                    "-o", str(tmp_path / "nope" / "out.lyrdb")])
+    assert rc == 1
