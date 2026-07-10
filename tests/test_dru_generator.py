@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """ADK KiCad DRU generator tests.
 
 Byte-diff against a golden DRU; coverage of CLI, adapter override parsing,
@@ -17,6 +18,7 @@ GOLDEN = Path(__file__).resolve().parent / "golden" / "assembly_rules.dru.golden
 
 sys.path.insert(0, str(DRU_DIR))
 from generate_assembly_dru import (  # noqa: E402
+    _format_number,
     load_defaults,
     load_interconnect_defaults,
     parse_adapter_overrides,
@@ -139,3 +141,71 @@ def test_interconnect_defaults_load():
     assert defaults["IXN_spacing"] == 40.0
     assert defaults["IXN_pitch"] == 75.0
     assert defaults["IXN_pad_size"] == 35.0
+
+
+# ---------------------------------------------------------------------------
+# Override-parser robustness and the fixed-point number filter
+# ---------------------------------------------------------------------------
+
+def test_format_number_avoids_scientific_notation():
+    # %g would emit '1.5e+06' (unparseable by KiCad); the filter stays decimal
+    # and trims trailing zeros, leaving small integers golden-identical.
+    assert _format_number(50.0) == "50"
+    assert _format_number(30.5) == "30.5"
+    assert _format_number(1500000.0) == "1500000"
+
+
+def test_override_ignores_non_literal_rhs(tmp_path):
+    # Per the documented 'only literal numeric overrides' scope, a non-literal
+    # RHS must be IGNORED, never truncated to a misleading partial number.
+    adapter = tmp_path / "weird.drc"
+    adapter.write_text(
+        "drc_rules['ASM_b'] = 30.0e3\n"      # scientific notation
+        "drc_rules['ASM_e'] = 1_000\n"       # ruby underscore grouping
+        "drc_rules['ASM_b'] = 30.0 + foo\n"  # computed expression
+        "drc_rules['asm_b'] = 25.0\n"        # lowercase: schema-invalid key
+    )
+    assert parse_adapter_overrides(adapter) == {}
+
+
+def test_override_literal_with_comment_parsed(tmp_path):
+    adapter = tmp_path / "ok.drc"
+    adapter.write_text("drc_rules['ASM_b'] = 40.0   # tightened\n")
+    assert parse_adapter_overrides(adapter) == {"ASM_b": 40.0}
+
+
+def test_main_rejects_unknown_override_key(tmp_path):
+    adapter = tmp_path / "bad_key.drc"
+    adapter.write_text("drc_rules['ASM_z'] = 10.0\n")
+    proc = subprocess.run(
+        [sys.executable, str(GENERATOR), "--interposer-adapter", str(adapter)],
+        capture_output=True, text=True)
+    assert proc.returncode == 1
+    assert "unknown rule key" in proc.stderr and "ASM_z" in proc.stderr
+
+
+def test_main_rejects_negative_override(tmp_path):
+    adapter = tmp_path / "neg.drc"
+    adapter.write_text("drc_rules['ASM_b'] = -50\n")
+    proc = subprocess.run(
+        [sys.executable, str(GENERATOR), "--interposer-adapter", str(adapter)],
+        capture_output=True, text=True)
+    assert proc.returncode == 1
+    assert "non-negative" in proc.stderr
+
+
+def test_main_missing_rule_params_clean_error(tmp_path):
+    proc = subprocess.run(
+        [sys.executable, str(GENERATOR), "--rule-params",
+         str(tmp_path / "nope.json")],
+        capture_output=True, text=True)
+    assert proc.returncode == 1
+    assert proc.stderr.startswith("error:")
+
+
+def test_ihp_sbump_overrides_parsed():
+    # The third shipped interconnect adapter (solder bump) previously had no
+    # coverage; a typo'd key/value would have shipped undetected.
+    adapter = resolve_interconnect_adapter_path("ihp_sbump")
+    assert parse_interconnect_overrides(adapter) == {
+        "IXN_spacing": 70.0, "IXN_pitch": 130.0, "IXN_pad_size": 60.0}

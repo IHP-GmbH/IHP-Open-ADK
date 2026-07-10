@@ -6,7 +6,8 @@ on:
 
 jobs:
   tests:
-    runs-on: ubuntu-latest
+    # Pinned to 22.04 so the KLayout .deb below matches the runner libc/Qt.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -18,11 +19,27 @@ jobs:
           # dependency list below (this file).
           cache-dependency-path: .github/workflows/tests.yml
 
-      - name: Install dependencies
-        run: pip install pytest klayout PyYAML jinja2
+      - name: Install Python dependencies
+        run: pip install pytest klayout jinja2 jsonschema
 
-      # The KLayout CLI is not installed on the runner; tests that shell out
-      # to it skip via their skipif markers and run in environments where the
-      # binary is available.
+      - name: Install KLayout CLI
+        # The DRC-deck tests shell out to `klayout -b`; the pip `klayout` wheel
+        # ships only the Python module, so without the CLI those 18 tests skip
+        # and the deck semantics go unchecked here. Install the CLI so they run.
+        # The adk-tools umbrella image is the authoritative deck gate; this is
+        # defense in depth, so it is best-effort: klayout.org keeps only the
+        # current build, and if the pinned URL is retired the deck tests just
+        # skip (as before) rather than failing the job. Bump the version then.
+        run: |
+          set -x
+          KLAYOUT_DEB=klayout_0.30.9-1_amd64.deb
+          if curl -fsSLO "https://www.klayout.org/downloads/Ubuntu-22/${KLAYOUT_DEB}"; then
+            sudo apt-get update
+            sudo apt-get install -y "./${KLAYOUT_DEB}"
+            klayout -b -v
+          else
+            echo "::warning::Could not download ${KLAYOUT_DEB}; the DRC-deck tests will skip. Update the pin in .github/workflows/tests.yml."
+          fi
+
       - name: Run tests
         run: pytest tests -q

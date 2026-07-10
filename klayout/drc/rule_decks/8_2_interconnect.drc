@@ -22,7 +22,7 @@
 #
 # interconnect_region defaults to chiplet_attachment_input; an adapter MAY
 # narrow it. The pitch->space conversion mirrors the interposer deck
-# (6_9_copperpillar.drc:82-89): KLayout has no native pitch check, so
+# (6_9_copperpillar.drc, rule Padc.e): KLayout has no native pitch check, so
 # min_space = pitch - pad_size (conservative for pads larger than pad_size).
 
 logger.info('ADK: starting interconnect-axis DRC checks')
@@ -43,6 +43,21 @@ if ixn_per_method
   # Region per method: the attachment pads under the boundaries of the dies
   # using that method (instances from the boundary manifest).
   ixn_method_ids = ixn_per_method.keys.sort
+
+  # Validate that every die referenced by a method resolves to a boundary
+  # instance in the manifest. 'instance' is schema-optional, so a boundary that
+  # omits it -- or a typo'd die id in the methods file -- would silently drop
+  # that chiplet's pads from its method region and under-check it. Fail loud
+  # instead (matching the runner's fail-loud manifest policy).
+  manifest_instances = boundary_manifest['boundaries'].map { |b| b['instance'] }.compact
+  referenced_dies = ixn_method_ids.flat_map { |mid| ixn_per_method[mid]['dies'] }.uniq
+  missing_dies = referenced_dies - manifest_instances
+  unless missing_dies.empty?
+    raise "Per-method interconnect references die instance(s) not in the " \
+          "boundary manifest: #{missing_dies.sort.join(', ')}. " \
+          "Manifest instances: #{manifest_instances.sort.join(', ')}."
+  end
+
   ixn_method_regions = {}
   ixn_method_ids.each do |mid|
     dies = ixn_per_method[mid]['dies']
@@ -67,6 +82,8 @@ if ixn_per_method
 
     ixn_pitch_value = mdef['IXN_pitch'].to_f
     ixn_pad_size    = mdef['IXN_pad_size'].to_f
+    raise "Interconnect method '#{mid}': IXN_pitch (#{ixn_pitch_value}) must " \
+          "exceed IXN_pad_size (#{ixn_pad_size})." if ixn_pitch_value <= ixn_pad_size
     logger.info("ADK: IXN.e.#{mid}")
     ixn_e = region.space((ixn_pitch_value - ixn_pad_size).um - ixn_circle_tol, euclidian)
     ixn_e.output("IXN.e.#{mid}", "IXN.e.#{mid} : Min. attachment-point pitch for #{mid} is #{ixn_pitch_value} um")
@@ -101,6 +118,8 @@ if ixn_per_method
 
     ixn_pitch_value = interconnect_rules['IXN_pitch'].to_f
     ixn_pad_size    = interconnect_rules['IXN_pad_size'].to_f
+    raise "Interconnect adapter: IXN_pitch (#{ixn_pitch_value}) must exceed " \
+          "IXN_pad_size (#{ixn_pad_size})." if ixn_pitch_value <= ixn_pad_size
     logger.info('ADK: IXN.e.unclaimed')
     ixn_e = ixn_unclaimed.space((ixn_pitch_value - ixn_pad_size).um - ixn_circle_tol, euclidian)
     ixn_e.output('IXN.e.unclaimed', "IXN.e.unclaimed : Min. attachment-point pitch is #{ixn_pitch_value} um (pads outside every method region)")
@@ -125,6 +144,8 @@ else
   logger.info('ADK: IXN.e')
   ixn_pitch_value = interconnect_rules['IXN_pitch'].to_f
   ixn_pad_size    = interconnect_rules['IXN_pad_size'].to_f
+  raise "Interconnect adapter: IXN_pitch (#{ixn_pitch_value}) must exceed " \
+        "IXN_pad_size (#{ixn_pad_size})." if ixn_pitch_value <= ixn_pad_size
   ixn_e = ixn_region.space((ixn_pitch_value - ixn_pad_size).um - ixn_circle_tol, euclidian)
   ixn_e.output('IXN.e', "IXN.e : Min. attachment-point pitch is #{ixn_pitch_value} um")
   ixn_e.forget

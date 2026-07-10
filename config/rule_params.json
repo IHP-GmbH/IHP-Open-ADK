@@ -6,7 +6,7 @@
         "ASM_e": 10000.00
     },
     "rule_descriptions": {
-        "ASM_b": "Minimum spacing between chiplets, in micrometres. Edge-to-edge between adjacent exchange0 polygons.",
-        "ASM_e": "Minimum chiplet area, in square micrometres. Polygons in exchange0 below this threshold are flagged."
+        "ASM_b": "Minimum spacing between chiplets, in micrometres. Edge-to-edge between adjacent chiplet boundary polygons.",
+        "ASM_e": "Minimum chiplet area, in square micrometres. Chiplet boundary polygons below this threshold are flagged."
     }
 }

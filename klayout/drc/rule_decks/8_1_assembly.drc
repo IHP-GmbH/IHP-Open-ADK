@@ -33,10 +33,12 @@ asm_e = chiplet_boundary.with_area(nil, asm_e_value.um2)
 asm_e.output('ASM.e', "ASM.e : Min. chiplet area is #{asm_e_value} um2")
 asm_e.forget
 
-# Rule ASM.f -- chiplet-attachment geometry interacting with a chiplet
-# boundary must be fully inside it. Attachment geometry that lies wholly
-# outside any chiplet (e.g. on the interposer itself) is allowed.
+# Rule ASM.f -- chiplet-attachment geometry overlapping a chiplet boundary
+# must be fully inside it. Attachment geometry that lies wholly outside any
+# chiplet (e.g. on the interposer itself), including geometry that merely abuts
+# a boundary edge with no area overlap, is allowed. (overlapping excludes the
+# pure edge-touch that interacting would wrongly flag.)
 logger.info('ADK: ASM.f')
-asm_f = chiplet_attachment_input.interacting(chiplet_boundary).not_inside(chiplet_boundary)
-asm_f.output('ASM.f', 'ASM.f : Chiplet-attachment geometry interacting with a chiplet must be fully inside it')
+asm_f = chiplet_attachment_input.overlapping(chiplet_boundary).not_inside(chiplet_boundary)
+asm_f.output('ASM.f', 'ASM.f : Chiplet-attachment geometry overlapping a chiplet must be fully inside it')
 asm_f.forget

@@ -13,7 +13,7 @@
 #     post-layout only by the ADK KLayout deck (adk/klayout/drc).
 
 (rule "ASM.b - Chiplet min spacing"
-  (constraint courtyard_clearance (min {{ "%g" % rules.ASM_b }}um))
+  (constraint courtyard_clearance (min {{ rules.ASM_b | num }}um))
   (condition "A.Type == 'Footprint' && B.Type == 'Footprint'"))
 {% if interconnect_adapter_name -%}
 #

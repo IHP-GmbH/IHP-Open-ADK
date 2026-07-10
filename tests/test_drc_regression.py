@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """ADK assembly DRC regression tests.
 
 Each test invokes the standalone runner via subprocess against a synthesized
@@ -47,6 +48,12 @@ def _violations(layout: Path, adapter: Path, run_dir: Path,
     proc = _run(layout, adapter, run_dir, report, legacy=legacy)
     assert report.is_file(), (
         f"Report not generated: {report}\n"
+        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+    # Pin the documented exit-code contract (run.sh consumes it): 0 = clean,
+    # 1 = violations; never a crash/tooling code on a well-formed input.
+    assert proc.returncode in (0, 1), (
+        f"runner exited {proc.returncode} (expected 0=clean / 1=violations).\n"
         f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     )
     return get_rules_with_violations(report)
@@ -218,6 +225,39 @@ def test_runner_aborts_without_manifest(fixture_layouts, test_adapter, tmp_path)
     combined = (proc.stdout + proc.stderr).lower()
     assert "manifest" in combined, (
         f"Error must mention the missing manifest. Output:\n{combined}"
+    )
+
+
+def test_asm_f_allows_abutting_outside_pad(test_adapter, tmp_path):
+    """ASM.f must NOT flag attachment geometry that abuts a chiplet boundary
+    edge with no area overlap (wholly outside). The deck uses overlapping()
+    rather than interacting(); the old interacting() wrongly flagged this,
+    contradicting the rule's own 'wholly outside is allowed' comment."""
+    import klayout.db as kdb
+
+    def _um(v):
+        return int(round(v * 1000))
+
+    gds = tmp_path / "abut.gds"
+    ly = kdb.Layout()
+    ly.dbu = 0.001
+    top = ly.create_cell("TOP")
+    pad = ly.layer(999, 0)  # attachment layer (matches test_interposer_adapter)
+    # Pad at x[200,300] shares the chiplet's x=200 right edge, fully outside it.
+    top.shapes(pad).insert(kdb.Box(_um(200), _um(50), _um(300), _um(150)))
+    ly.write(str(gds))
+    manifest = {
+        "schema": "adk-boundary-manifest", "version": SUPPORTED_MANIFEST_VERSION,
+        "dbu_um": 0.001, "top_cell": "TOP",
+        "boundaries": [{"instance": "U1", "source_die": "T", "class": "chiplet",
+                        "polygon_dbu": [[_um(0), _um(0)], [_um(200), _um(0)],
+                                        [_um(200), _um(200)], [_um(0), _um(200)]]}],
+    }
+    gds.with_name(gds.stem + ".boundaries.json").write_text(json.dumps(manifest))
+
+    violations = _violations(gds, test_adapter, tmp_path)
+    assert "ASM.f" not in violations, (
+        f"abutting-but-outside pad must not trigger ASM.f, got {sorted(violations)}"
     )
 
 

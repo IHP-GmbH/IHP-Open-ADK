@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Validate the ADK chiplet pad vocabulary registry.
 
 config/chiplet_pads.json is the single source of truth for the canonical
