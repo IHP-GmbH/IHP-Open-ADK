@@ -42,11 +42,13 @@ Pad sources per die (KiCad reference, e.g. ``U1``):
 Matching per device: by ``pin_name`` when both sides are named; entries
 where at least one side is unnamed fall back to greedy nearest-unique
 matching within tolerance. Findings: ``MISALIGNED`` (named match beyond
-tolerance -- except pillars flagged ``moved_by_auto_resolve: true``, whose
-deviation is the producer's own collision auto-resolve shift and demotes to
-a warning; when the manifest records ``auto_resolve_shift_um`` the demotion
-is bounded to shift + tolerance, beyond which the pair is MISALIGNED
-again), ``PAD_WITHOUT_PILLAR``, ``PILLAR_WITHOUT_PAD``,
+tolerance -- except pillars flagged ``moved_by_auto_resolve: true`` **with**
+a recorded ``auto_resolve_shift_um`` magnitude, whose deviation is the
+producer's own collision auto-resolve shift and demotes to a warning when it
+stays within shift + tolerance (beyond that it is MISALIGNED again). A bare
+``moved_by_auto_resolve`` boolean with no magnitude cannot bound the excuse
+and does not demote -- it is advisory only), ``PAD_WITHOUT_PILLAR``,
+``PILLAR_WITHOUT_PAD``,
 ``AMBIGUOUS_MATCH`` (nearest-unique fallback cannot decide), and -- with
 ``--strict`` -- ``NO_PAD_SOURCE`` for dies that declare a connection method
 but were given no pad source (a warning otherwise).
@@ -254,6 +256,12 @@ def load_pillar_manifest(path) -> Dict[str, Any]:
                 raise CheckError(
                     "pillar manifest %s: pillars[%d].%s must be a number"
                     % (path, i, key))
+            if not math.isfinite(float(value)):
+                # NaN/Inf would make every distance comparison fail-open
+                # ('dist > tol' is False for NaN); reject at read time.
+                raise CheckError(
+                    "pillar manifest %s: pillars[%d].%s must be finite "
+                    "(got %r)" % (path, i, key, value))
         if float(entry["diameter_um"]) <= 0:
             raise CheckError(
                 "pillar manifest %s: pillars[%d].diameter_um must be > 0"
@@ -443,18 +451,17 @@ def match_device(ref: str, pads: List[Dict[str, Any]],
 
     Named entries (both sides non-empty) match by exact pin name; a named
     pair beyond tolerance is MISALIGNED. Exception: when the pillar carries
-    ``moved_by_auto_resolve: true``, the producer's collision auto-resolve
-    shifted that bump away from its pad on purpose, so the deviation is
-    expected — with a ``warnings`` list supplied the pair is reported there
-    instead of as a finding (the CLI/run_check path); without one (legacy
-    importers) it stays a MISALIGNED finding. The demotion is BOUNDED when
-    the manifest records the shift magnitude (``auto_resolve_shift_um``):
-    deviation beyond shift + tolerance is MISALIGNED again — the flag
-    explains at most the recorded shift, never an arbitrary offset. Only
-    manifests without the magnitude (foreign producers) fall back to the
-    unbounded demotion. Unnamed moved pillars beyond tolerance still
-    surface as PAD_WITHOUT_PILLAR/PILLAR_WITHOUT_PAD leftovers: without a
-    name the pair cannot be attributed.
+    ``moved_by_auto_resolve: true`` AND a recorded ``auto_resolve_shift_um``
+    magnitude, the producer's collision auto-resolve shifted that bump away
+    from its pad on purpose, so a deviation within shift + tolerance is
+    reported to the ``warnings`` list instead of as a finding (the
+    CLI/run_check path); beyond shift + tolerance the flag cannot explain it
+    and it is MISALIGNED again. A bare ``moved_by_auto_resolve`` boolean
+    with no magnitude does NOT demote (it cannot bound the excuse) and stays
+    a MISALIGNED finding; so does any moved pillar when no ``warnings`` list
+    is supplied (legacy importers). Unnamed moved pillars beyond tolerance
+    still surface as PAD_WITHOUT_PILLAR/PILLAR_WITHOUT_PAD leftovers:
+    without a name the pair cannot be attributed.
 
     Two conflicting names never match (they surface as PAD_WITHOUT_PILLAR +
     PILLAR_WITHOUT_PAD). Remaining entries where at least one side is
@@ -496,24 +503,22 @@ def match_device(ref: str, pads: List[Dict[str, Any]],
             matched += 1
             if dist > tolerance_um:
                 pillar = pillars[j]
-                if (warnings is not None
-                        and pillar.get("moved_by_auto_resolve") is True):
-                    # The auto-resolve flag only excuses the recorded shift.
-                    # With a magnitude, bound the demotion to shift+tolerance
-                    # so a genuine placement bug that happens to hit a
-                    # collision-moved bump is not hidden; without one (foreign
-                    # producer) fall back to the unbounded demotion.
-                    shift = pillar.get("auto_resolve_shift_um")
-                    if shift is None or dist <= float(shift) + tolerance_um:
+                shift = pillar.get("auto_resolve_shift_um")
+                moved = pillar.get("moved_by_auto_resolve") is True
+                if warnings is not None and moved and shift is not None:
+                    # The auto-resolve flag excuses exactly the recorded
+                    # shift: bound the demotion to shift+tolerance so a
+                    # genuine placement bug that happens to hit a
+                    # collision-moved bump is not hidden.
+                    if dist <= float(shift) + tolerance_um:
                         warnings.append(
                             "die %s: pillar %r sits %.6f um from pad %r "
                             "(tolerance %.6f um) but is flagged "
-                            "moved_by_auto_resolve%s — the producer's "
-                            "collision auto-resolve shifted it on purpose; "
-                            "not a finding"
+                            "moved_by_auto_resolve (shift %.6f um) — the "
+                            "producer's collision auto-resolve shifted it on "
+                            "purpose; not a finding"
                             % (ref, name, dist, name, tolerance_um,
-                               "" if shift is None
-                               else " (shift %.6f um)" % float(shift)))
+                               float(shift)))
                         continue
                     # Beyond shift+tolerance: the flag cannot explain this.
                     findings.append(_finding(
@@ -527,6 +532,11 @@ def match_device(ref: str, pads: List[Dict[str, Any]],
                         distance_um=dist,
                         auto_resolve_shift_um=float(shift)))
                     continue
+                # A moved flag WITHOUT a recorded magnitude cannot bound the
+                # excuse, so it does NOT demote: a bare boolean is advisory
+                # only. Our producer always records the magnitude alongside
+                # the flag, so real manifests are unaffected; this closes an
+                # unbounded false-pass for foreign/hand-edited manifests.
                 findings.append(_finding(
                     "MISALIGNED", ref,
                     "pad %r sits %.6f um from its pillar (tolerance %.6f um)"
@@ -606,6 +616,14 @@ def run_check(assembly: Dict[str, Any], manifest: Dict[str, Any],
     (``[{"name", "x_um", "y_um"}, ...]``); the placement transform is
     applied here. Unknown refs are a hard error.
     """
+    if not math.isfinite(tolerance_um) or tolerance_um < 0:
+        # Validate before the per-die loop so a NaN/negative tolerance is
+        # rejected even when no die has a pad source (match_device, which
+        # also guards, is not reached in that case). A CI checker must not
+        # go green on a failed-computation tolerance.
+        raise CheckError(
+            "tolerance must be a finite non-negative number of micrometers, "
+            "got %r" % tolerance_um)
     units = (assembly.get("assembly") or {}).get("units")
     if units is not None and units != SUPPORTED_UNITS:
         # The die positions and pad coordinates are compared as micrometers;

@@ -149,19 +149,34 @@ def test_translated_die_is_misaligned(tmp_path, capsys):
 
 def test_moved_by_auto_resolve_demotes_to_warning(tmp_path, capsys):
     """A named pair beyond tolerance whose pillar carries
-    moved_by_auto_resolve: true is the producer's own collision-resolver
-    shift, not a placement error: warning, exit 0."""
+    moved_by_auto_resolve: true AND a recorded shift magnitude is the
+    producer's own collision-resolver shift, not a placement error: warning,
+    exit 0."""
     chiplet = write_chiplet(tmp_path, [make_die()])
     pins = write_pinlist(tmp_path, [("A", 10.0, 5.0)])
     manifest = write_manifest(tmp_path, [
         make_pillar(pin_name="A", x=1015.0, y=505.0,  # 5 um off in x
-                    moved_by_auto_resolve=True),
+                    moved_by_auto_resolve=True, auto_resolve_shift_um=5.0),
     ])
     assert run_main(chiplet, manifest, "--pins", "U1=%s" % pins) == 0
     captured = capsys.readouterr()
     assert "MISALIGNED" not in captured.out
     assert "moved_by_auto_resolve" in captured.err
     assert "PASSED" in captured.out
+
+
+def test_moved_flag_without_magnitude_stays_misaligned(tmp_path):
+    """A bare moved_by_auto_resolve boolean with no auto_resolve_shift_um
+    cannot bound the excuse, so it does NOT demote: an arbitrarily large
+    deviation must not pass on the flag alone (foreign/hand-edited
+    manifests). Our own producer always records the magnitude."""
+    chiplet = write_chiplet(tmp_path, [make_die()])
+    pins = write_pinlist(tmp_path, [("A", 10.0, 5.0)])
+    manifest = write_manifest(tmp_path, [
+        make_pillar(pin_name="A", x=1110.0, y=505.0,  # 100 um off
+                    moved_by_auto_resolve=True),  # no magnitude
+    ])
+    assert run_main(chiplet, manifest, "--pins", "U1=%s" % pins) == 1
 
 
 @pytest.mark.parametrize("extra", [{}, {"moved_by_auto_resolve": False}])
@@ -224,10 +239,12 @@ def test_negative_auto_resolve_shift_exits_2(tmp_path):
 
 def test_match_device_without_warnings_list_keeps_finding():
     """Importer compatibility: no warnings list supplied -> the moved-flag
-    pair stays a MISALIGNED finding (legacy strict behavior)."""
+    pair stays a MISALIGNED finding (legacy strict behavior). With a
+    warnings list and a recorded magnitude it demotes."""
     pads = [{"name": "A", "x_um": 0.0, "y_um": 0.0}]
     pillars = [make_pillar(pin_name="A", x=5.0, y=0.0,
-                           moved_by_auto_resolve=True)]
+                           moved_by_auto_resolve=True,
+                           auto_resolve_shift_um=5.0)]
     findings, matched = pvp.match_device("U1", pads, pillars,
                                          tolerance_um=1.0)
     assert matched == 1
@@ -386,6 +403,27 @@ def test_malformed_pillar_entry_exits_2(tmp_path):
          "x_um": "not-a-number", "y_um": 0.0, "diameter_um": 75.0},
     ])
     assert run_main(chiplet, manifest) == 2
+
+
+@pytest.mark.parametrize("bad", [
+    {"x_um": float("nan")},
+    {"y_um": float("inf")},
+    {"diameter_um": float("nan")},
+])
+def test_non_finite_coordinate_exits_2(tmp_path, bad, capsys):
+    """NaN/Inf coordinates would make every distance comparison fail-open
+    ('dist > tol' is False for NaN): reject at read time."""
+    chiplet = write_chiplet(tmp_path, [make_die()])
+    # json.dumps emits NaN/Infinity tokens; the reader must still reject.
+    pillar = make_pillar(pin_name="A", x=1010.0, y=505.0)
+    pillar.update(bad)
+    path = tmp_path / "unit_interposer.pillars.json"
+    path.write_text(json.dumps({
+        "schema": "adk-pillar-manifest", "version": "1.0.0",
+        "generator": "test", "assembly_gds": "unit_interposer.gds",
+        "units": "um", "pillars": [pillar]}))
+    assert run_main(chiplet, path) == 2
+    assert "finite" in capsys.readouterr().err
 
 
 def test_missing_manifest_exits_2(tmp_path):
