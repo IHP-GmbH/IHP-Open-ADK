@@ -18,7 +18,11 @@ Landed since 0.2.0, not yet tied to a contract bump.
   `config/chiplet_pads.json` layer vocabulary. Matching by pin name with a
   nearest-unique fallback; findings `MISALIGNED`, `PAD_WITHOUT_PILLAR`,
   `PILLAR_WITHOUT_PAD`, `AMBIGUOUS_MATCH` (plus `NO_PAD_SOURCE` under
-  `--strict`).
+  `--strict`). Pillars the producer's collision auto-resolve moved are
+  demoted to warnings, bounded by the optional `auto_resolve_shift_um`
+  magnitude the manifest records (a deviation beyond shift + tolerance stays
+  `MISALIGNED`). Rejects a non-`um` assembly and non-finite/negative
+  tolerances rather than passing silently.
 - Added `openroad/chiplet2dbx.py`: exports a finalized `.chiplet` assembly to
   3Dblox (`.3dbv` + `.3dbx` + minimal per-technology LEFs) for OpenROAD's
   `read_3dbx` / `check_3dblox`. Geometric and lossy by declaration; verifies

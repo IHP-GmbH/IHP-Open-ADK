@@ -4,17 +4,19 @@
 
 Manifest-level alignment check: for every die of a finalized ``.chiplet``
 assembly with a known pad source, the die-local pad centers are transformed
-into the interposer top-cell global frame (micrometers, y-up) and compared
-against the Cu-pillar/bump centers recorded in the assembly's
+into the canonical interposer GDS-bbox-corner frame (micrometers, y-up --
+the frame ``.chiplet`` die positions live in) and compared against the
+Cu-pillar/bump centers recorded in the assembly's
 ``<gds-stem>.pillars.json`` sidecar (the pillar manifest,
-``config/schema/pillar_manifest.schema.json``). The manifest's ``x_um/y_um``
-are the as-drawn pillar centers (post collision auto-resolve) and are
-authoritative for this check; the assembly GDS remains fab ground truth.
+``config/schema/pillar_manifest.schema.json``), which the producer emits in
+that same frame. The manifest's ``x_um/y_um`` are the as-drawn pillar
+centers (post collision auto-resolve, up to the constant frame rebase) and
+are authoritative for this check; the assembly GDS remains fab ground truth.
 
-Frame contract (die-local pad -> assembly-global frame). Pad coordinates are
-die-local GDS micrometers, y-up, relative to the die GDS origin (the
+Frame contract (die-local pad -> canonical assembly frame). Pad coordinates
+are die-local GDS micrometers, y-up, relative to the die GDS origin (the
 ``gds_origin`` anchor); the die's ``.chiplet`` ``position`` is where that
-origin lands in the interposer top-cell frame and ``rotation.z`` is
+origin lands in the canonical GDS-bbox-corner frame and ``rotation.z`` is
 counter-clockwise degrees in that y-up frame (arbitrary angles supported).
 ``flip_chip`` dies are realized in the assembly as an x-mirror of the die
 artwork applied BEFORE rotation: the assembly generator places the flipped
@@ -42,7 +44,9 @@ where at least one side is unnamed fall back to greedy nearest-unique
 matching within tolerance. Findings: ``MISALIGNED`` (named match beyond
 tolerance -- except pillars flagged ``moved_by_auto_resolve: true``, whose
 deviation is the producer's own collision auto-resolve shift and demotes to
-a warning), ``PAD_WITHOUT_PILLAR``, ``PILLAR_WITHOUT_PAD``,
+a warning; when the manifest records ``auto_resolve_shift_um`` the demotion
+is bounded to shift + tolerance, beyond which the pair is MISALIGNED
+again), ``PAD_WITHOUT_PILLAR``, ``PILLAR_WITHOUT_PAD``,
 ``AMBIGUOUS_MATCH`` (nearest-unique fallback cannot decide), and -- with
 ``--strict`` -- ``NO_PAD_SOURCE`` for dies that declare a connection method
 but were given no pad source (a warning otherwise).
@@ -259,6 +263,15 @@ def load_pillar_manifest(path) -> Dict[str, Any]:
             raise CheckError(
                 "pillar manifest %s: pillars[%d].moved_by_auto_resolve must "
                 "be a boolean when present (omit it when unknown)" % (path, i))
+        shift = entry.get("auto_resolve_shift_um")
+        if shift is not None:
+            if (isinstance(shift, bool)
+                    or not isinstance(shift, (int, float))
+                    or not math.isfinite(float(shift)) or float(shift) < 0):
+                raise CheckError(
+                    "pillar manifest %s: pillars[%d].auto_resolve_shift_um "
+                    "must be a finite non-negative number when present"
+                    % (path, i))
     return manifest
 
 
@@ -388,10 +401,12 @@ def _die_placement(comp: Dict[str, Any]) -> Tuple[float, float, float, bool]:
 
 def transform_pads(comp: Dict[str, Any], pads: List[Dict[str, Any]]
                    ) -> List[Dict[str, Any]]:
-    """Map die-local pads into the interposer top-cell global frame.
+    """Map die-local pads into the canonical interposer GDS-bbox-corner frame.
 
     Applies ``global = position + R(rotation.z) * M * pad`` per the frame
-    contract in the module docstring (M = x-mirror for flip_chip).
+    contract in the module docstring (M = x-mirror for flip_chip). The die
+    ``position`` already lives in that canonical frame, so the result is
+    directly comparable to the rebased pillar-manifest coordinates.
     """
     x0, y0, rotation, mirrored = _die_placement(comp)
     angle = math.radians(rotation)
@@ -432,9 +447,14 @@ def match_device(ref: str, pads: List[Dict[str, Any]],
     shifted that bump away from its pad on purpose, so the deviation is
     expected — with a ``warnings`` list supplied the pair is reported there
     instead of as a finding (the CLI/run_check path); without one (legacy
-    importers) it stays a MISALIGNED finding. Unnamed moved pillars beyond
-    tolerance still surface as PAD_WITHOUT_PILLAR/PILLAR_WITHOUT_PAD
-    leftovers: without a name the pair cannot be attributed.
+    importers) it stays a MISALIGNED finding. The demotion is BOUNDED when
+    the manifest records the shift magnitude (``auto_resolve_shift_um``):
+    deviation beyond shift + tolerance is MISALIGNED again — the flag
+    explains at most the recorded shift, never an arbitrary offset. Only
+    manifests without the magnitude (foreign producers) fall back to the
+    unbounded demotion. Unnamed moved pillars beyond tolerance still
+    surface as PAD_WITHOUT_PILLAR/PILLAR_WITHOUT_PAD leftovers: without a
+    name the pair cannot be attributed.
 
     Two conflicting names never match (they surface as PAD_WITHOUT_PILLAR +
     PILLAR_WITHOUT_PAD). Remaining entries where at least one side is
@@ -442,6 +462,13 @@ def match_device(ref: str, pads: List[Dict[str, Any]],
     near-ties the fallback cannot decide become AMBIGUOUS_MATCH. Returns
     (findings, matched_count).
     """
+    if not math.isfinite(tolerance_um) or tolerance_um < 0:
+        # NaN would fail-open ('dist > nan' is always False): a pipeline
+        # interpolating a failed computation must die here, not go green.
+        raise CheckError(
+            "tolerance must be a finite non-negative number of micrometers, "
+            "got %r" % tolerance_um)
+
     findings: List[Dict[str, Any]] = []
     matched = 0
     pad_free = set(range(len(pads)))
@@ -468,14 +495,37 @@ def match_device(ref: str, pads: List[Dict[str, Any]],
             pillar_free.discard(j)
             matched += 1
             if dist > tolerance_um:
+                pillar = pillars[j]
                 if (warnings is not None
-                        and pillars[j].get("moved_by_auto_resolve") is True):
-                    warnings.append(
-                        "die %s: pillar %r sits %.6f um from pad %r "
-                        "(tolerance %.6f um) but is flagged "
-                        "moved_by_auto_resolve — the producer's collision "
-                        "auto-resolve shifted it on purpose; not a finding"
-                        % (ref, name, dist, name, tolerance_um))
+                        and pillar.get("moved_by_auto_resolve") is True):
+                    # The auto-resolve flag only excuses the recorded shift.
+                    # With a magnitude, bound the demotion to shift+tolerance
+                    # so a genuine placement bug that happens to hit a
+                    # collision-moved bump is not hidden; without one (foreign
+                    # producer) fall back to the unbounded demotion.
+                    shift = pillar.get("auto_resolve_shift_um")
+                    if shift is None or dist <= float(shift) + tolerance_um:
+                        warnings.append(
+                            "die %s: pillar %r sits %.6f um from pad %r "
+                            "(tolerance %.6f um) but is flagged "
+                            "moved_by_auto_resolve%s — the producer's "
+                            "collision auto-resolve shifted it on purpose; "
+                            "not a finding"
+                            % (ref, name, dist, name, tolerance_um,
+                               "" if shift is None
+                               else " (shift %.6f um)" % float(shift)))
+                        continue
+                    # Beyond shift+tolerance: the flag cannot explain this.
+                    findings.append(_finding(
+                        "MISALIGNED", ref,
+                        "pad %r sits %.6f um from its pillar, more than the "
+                        "recorded auto-resolve shift %.6f um plus tolerance "
+                        "%.6f um" % (name, dist, float(shift), tolerance_um),
+                        pad_name=name, pillar_pin_name=name,
+                        pad_x_um=pads[i]["x_um"], pad_y_um=pads[i]["y_um"],
+                        pillar_x_um=pillar["x_um"], pillar_y_um=pillar["y_um"],
+                        distance_um=dist,
+                        auto_resolve_shift_um=float(shift)))
                     continue
                 findings.append(_finding(
                     "MISALIGNED", ref,
@@ -556,6 +606,14 @@ def run_check(assembly: Dict[str, Any], manifest: Dict[str, Any],
     (``[{"name", "x_um", "y_um"}, ...]``); the placement transform is
     applied here. Unknown refs are a hard error.
     """
+    units = (assembly.get("assembly") or {}).get("units")
+    if units is not None and units != SUPPORTED_UNITS:
+        # The die positions and pad coordinates are compared as micrometers;
+        # a mm-declared assembly would silently pass at 1000x scale. Reject
+        # it loudly, same policy as chiplet2dbx.
+        raise CheckError(
+            "assembly.units is %r; only %r is supported (positions are "
+            "compared as micrometers)" % (units, SUPPORTED_UNITS))
     dies = {str(c.get("id")): c
             for c in (assembly.get("components") or [])
             if c.get("type") == "die"}

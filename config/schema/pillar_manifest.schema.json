@@ -18,7 +18,7 @@
                 "type": "object",
                 "required": ["device_ref", "pin_name", "method", "x_um", "y_um", "diameter_um"],
                 "properties": {
-                    "device_ref": { "type": "string" },
+                    "device_ref": { "type": "string", "minLength": 1 },
                     "pin_name": {
                         "type": "string",
                         "description": "Pad/pin name; empty string when unknown."
@@ -37,6 +37,11 @@
                     "moved_by_auto_resolve": {
                         "type": "boolean",
                         "description": "True when collision auto-resolve shifted this bump; the key is OMITTED when unknown."
+                    },
+                    "auto_resolve_shift_um": {
+                        "type": "number",
+                        "minimum": 0,
+                        "description": "Distance the bump was shifted by collision auto-resolve (frame-invariant, so unaffected by the rebase). Present only on shifted bumps; lets consumers bound the excused pad-to-pillar deviation to shift + tolerance instead of accepting any distance on the boolean flag."
                     }
                 }
             }

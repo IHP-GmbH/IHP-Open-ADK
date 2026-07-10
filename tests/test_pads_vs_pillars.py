@@ -188,6 +188,40 @@ def test_moved_pillar_within_tolerance_is_silent(tmp_path, capsys):
     assert "moved_by_auto_resolve" not in capsys.readouterr().err
 
 
+def test_auto_resolve_shift_bounds_demotion(tmp_path, capsys):
+    """With a recorded shift the demotion is bounded: a deviation within
+    shift + tolerance is a warning, beyond it is MISALIGNED again -- the
+    flag can only excuse the shift the producer actually applied."""
+    chiplet = write_chiplet(tmp_path, [make_die()])
+    pins = write_pinlist(tmp_path, [("A", 10.0, 5.0)])
+    # Pillar 5 um off; recorded shift 5 um, tolerance 1 um -> budget 6 um.
+    ok = write_manifest(tmp_path, [
+        make_pillar(pin_name="A", x=1015.0, y=505.0,
+                    moved_by_auto_resolve=True, auto_resolve_shift_um=5.0),
+    ], name="within")
+    assert run_main(chiplet, ok, "--pins", "U1=%s" % pins) == 0
+    assert "shift" in capsys.readouterr().err
+    # Same pillar but the shift was only 1 um: 5 um deviation exceeds the
+    # 2 um budget -> real misalignment, not excusable by the flag.
+    bad = write_manifest(tmp_path, [
+        make_pillar(pin_name="A", x=1015.0, y=505.0,
+                    moved_by_auto_resolve=True, auto_resolve_shift_um=1.0),
+    ], name="beyond")
+    assert run_main(chiplet, bad, "--pins", "U1=%s" % pins) == 1
+    out = capsys.readouterr().out
+    assert "MISALIGNED" in out
+    assert "recorded auto-resolve shift" in out
+
+
+def test_negative_auto_resolve_shift_exits_2(tmp_path):
+    """A negative recorded shift is a malformed manifest."""
+    chiplet = write_chiplet(tmp_path, [make_die()])
+    manifest = write_manifest(tmp_path, [
+        make_pillar(pin_name="A", auto_resolve_shift_um=-1.0),
+    ])
+    assert run_main(chiplet, manifest) == 2
+
+
 def test_match_device_without_warnings_list_keeps_finding():
     """Importer compatibility: no warnings list supplied -> the moved-flag
     pair stays a MISALIGNED finding (legacy strict behavior)."""
@@ -380,6 +414,64 @@ def test_strict_flags_unchecked_die(tmp_path, capsys):
                     "--json", str(report_path)) == 1
     report = json.loads(report_path.read_text())
     assert [f["type"] for f in report["findings"]] == ["NO_PAD_SOURCE"]
+
+
+@pytest.mark.parametrize("bad_tol", ["nan", "-1.0", "inf"])
+def test_pathological_tolerance_exits_2(tmp_path, bad_tol, capsys):
+    """NaN would fail-open ('dist > nan' is False), negative and inf are
+    nonsense: all must be rejected, never a silent PASS."""
+    chiplet = write_chiplet(tmp_path, [make_die()])
+    pins = write_pinlist(tmp_path, [("A", 10.0, 5.0)])
+    manifest = write_manifest(tmp_path, [
+        make_pillar(pin_name="A", x=1100.0, y=505.0),  # 90 um off
+    ])
+    assert run_main(chiplet, manifest, "--pins", "U1=%s" % pins,
+                    "--tolerance-um", bad_tol) == 2
+    assert "tolerance" in capsys.readouterr().err
+
+
+def test_non_um_assembly_exits_2(tmp_path, capsys):
+    """A .chiplet declaring mm units would compare positions at 1000x
+    scale: reject it, do not silently PASS (mirrors chiplet2dbx)."""
+    chiplet = write_chiplet(tmp_path, [make_die()])
+    # Rewrite assembly.units to mm.
+    doc = yaml.safe_load(chiplet.read_text())
+    doc["assembly"]["units"] = "mm"
+    chiplet.write_text(yaml.safe_dump(doc, sort_keys=False))
+    pins = write_pinlist(tmp_path, [("A", 10.0, 5.0)])
+    manifest = write_manifest(tmp_path, [make_pillar(pin_name="A",
+                                                     x=1010.0, y=505.0)])
+    assert run_main(chiplet, manifest, "--pins", "U1=%s" % pins) == 2
+    assert "units" in capsys.readouterr().err
+
+
+def test_no_json_report_on_validation_error(tmp_path):
+    """--json output is not written when the run aborts at exit 2."""
+    chiplet = write_chiplet(tmp_path, [make_die()])
+    manifest = write_manifest(tmp_path, [], version="0.9.0")
+    report_path = tmp_path / "report.json"
+    assert run_main(chiplet, manifest, "--json", str(report_path)) == 2
+    assert not report_path.exists()
+
+
+def test_gds_pads_without_klayout_exits_2(tmp_path, monkeypatch, capsys):
+    """--gds-pads on an interpreter without klayout.db fails loudly (2),
+    not with an opaque ImportError traceback."""
+    import builtins
+    real_import = builtins.__import__
+
+    def _no_klayout(name, *args, **kwargs):
+        if name == "klayout.db" or name.startswith("klayout"):
+            raise ImportError("simulated missing klayout")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_klayout)
+    gds = tmp_path / "die.gds"
+    gds.write_text("")  # never read: the import guard fires first
+    chiplet = write_chiplet(tmp_path, [make_die(layout=str(gds))])
+    manifest = write_manifest(tmp_path, [])
+    assert run_main(chiplet, manifest, "--gds-pads", "U1") == 2
+    assert "klayout" in capsys.readouterr().err
 
 
 def test_empty_pillars_with_no_connected_dies_passes(tmp_path):

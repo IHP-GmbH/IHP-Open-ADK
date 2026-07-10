@@ -45,19 +45,20 @@ Top-level object:
 | `version` | yes | string | exact `"1.0.0"` (see version policy) |
 | `units` | yes | string | literal `"um"`; `x_um`/`y_um` are a coordinate contract |
 | `pillars` | yes | array | one entry per drawn pillar; may be empty |
-| `generator` | no | string | producing tool name + version, for provenance |
+| `generator` | no | string | producing tool name, for provenance (the producer writes `"hyp_to_gds.py"`) |
 | `assembly_gds` | no | string | basename of the assembly GDS this sidecar describes |
 
 Each `pillars[]` entry:
 
 | Field | Required | Type | Meaning |
 |---|---|---|---|
-| `device_ref` | yes | string | KiCad reference of the die the pillar belongs to (e.g. `U1`) |
+| `device_ref` | yes | string (non-empty) | KiCad reference of the die the pillar belongs to (e.g. `U1`) |
 | `pin_name` | yes | string | pad/pin name; `""` when unknown |
 | `method` | yes | string | interconnect method id (e.g. `cupillar_opt1`) |
 | `x_um`, `y_um` | yes | number | pillar **center** in the canonical interposer GDS-bbox-corner frame — the same frame `.chiplet` die positions and io_pads use, so the two sidecars compare directly (the producer rebases its raw drawing coordinates by the interposer top-cell bbox lower-left corner); y-up, micrometers, **post** collision auto-resolve (the as-drawn position up to that constant frame translation) |
 | `diameter_um` | yes | number > 0 | bump body diameter for the method |
 | `moved_by_auto_resolve` | no | boolean | `true` when auto-resolve shifted this bump; the key is **omitted** when unknown, never written as a guess |
+| `auto_resolve_shift_um` | no | number ≥ 0 | distance the bump was shifted by auto-resolve (frame-invariant); present only on shifted bumps. Lets a checker bound the excused deviation to shift + tolerance instead of accepting any distance on the boolean alone |
 
 ## Authority
 
