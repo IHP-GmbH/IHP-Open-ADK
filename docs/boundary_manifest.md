@@ -82,6 +82,14 @@ the viewer: `boundaries_to_rdb.py` labels each marker `instance` else
 identity/provenance only; consumers must not let them disagree with
 `polygon_dbu` in any check.
 
+### No z coordinate: single-tier by design
+
+Boundaries are 2D placement polygons; the schema has no z, tier, or height
+field (`transform.origin_um` is exactly `[x, y]`). Every consumer, including
+the ASM rules, therefore treats all chiplets as sitting on one attachment
+plane. Adding a z/tier field is a version-bump event and must land together
+with tier-aware consumers (see `architecture.md`, Known limitations).
+
 ### Vestigial schema fields: `kgd`, `bbox_dbu`
 
 The schema declares `kgd` (`boolean | null`) and `bbox_dbu` (array of 4
