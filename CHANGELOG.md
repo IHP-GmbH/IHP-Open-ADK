@@ -9,6 +9,10 @@ the z-mounting rule and fails loudly rather than emit inconsistent geometry.
 Ships with the vendored `chiplet_format_io` reference reader (`vendor/`) and
 a three-tier test suite (goldens, semantics, live linter answer-key).
 
+Bump-aware mode: per-die `--pins` lists (gds_to_kicad `*.pins.json`) add
+`.bmap` bump maps and per-method bump macro LEFs generated from the
+interconnect PDK manifest, activating the linter's bump-alignment check.
+
 ## 0.1.0 — 2026-05-31
 
 Initial scaffolding. Directory layout, shared registries (`config/layers.json`,

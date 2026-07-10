@@ -54,16 +54,22 @@ the set of abstract inputs documented in `docs/adapter_contract.md`.
 ## Exporting to OpenROAD 3Dblox
 
 ```bash
-python openroad/chiplet2dbx.py --chiplet <design.chiplet> --out-dir build/3dblox
+python openroad/chiplet2dbx.py --chiplet <design.chiplet> --out-dir build/3dblox \
+    [--pins U1=chiplets/die_a.pins.json ...]
 ```
 
 Produces `<name>.3dbv` (black-box ChipletDefs), `<name>.3dbx` (the placed
 assembly) and one minimal technology LEF per `.chiplet` technology. In
 OpenROAD, `read_3dbx <name>.3dbx` loads the assembly and runs the
-`check_3dblox` geometry linter. The export is geometric and lossy by
-declaration (no netlist, no bump maps, no artwork); the mapping conventions
-follow the chiplet-spec interoperability appendix, and the `.chiplet` file
-stays the authoritative placement source.
+`check_3dblox` geometry linter. With per-die `--pins` lists (the
+`*.pins.json` artifact gds_to_kicad extracts from a die's GDS or footprint)
+the affected dies also get a `.bmap` bump map plus a per-method bump macro
+LEF rendered by the interconnect PDK's manifest-driven generator
+(`INTERCONNECT_PDK_ROOT` or sibling checkout), which activates the linter's
+bump-alignment check. The export stays lossy by declaration (no artwork,
+no parasitics); the mapping conventions follow the chiplet-spec
+interoperability appendix, and the `.chiplet` file stays the authoritative
+placement source.
 
 ## License
 
