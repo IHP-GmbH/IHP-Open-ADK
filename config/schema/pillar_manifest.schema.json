@@ -2,7 +2,7 @@
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://heterogenic-chip-design-project/adk/config/schema/pillar_manifest.schema.json",
     "title": "ADK pillar manifest",
-    "description": "Sidecar emitted next to an assembly GDS by the Cu-pillar/bump producer (hyp_to_gds). Carries one entry per pillar/bump instantiated in the assembly, with the as-drawn center (interposer top-cell global frame, y-up, micrometers, post collision auto-resolve). Consumed by manifest-level checks (checks/pads_vs_pillars.py); x_um/y_um are authoritative for those checks while the GDS remains fab ground truth.",
+    "description": "Sidecar emitted next to an assembly GDS by the Cu-pillar/bump producer (hyp_to_gds). Carries one entry per pillar/bump instantiated in the assembly, with the as-drawn center rebased into the canonical interposer GDS-bbox-corner frame (the same frame .chiplet die positions use; y-up, micrometers, post collision auto-resolve). Consumed by manifest-level checks (checks/pads_vs_pillars.py); x_um/y_um are authoritative for those checks while the GDS remains fab ground truth.",
     "type": "object",
     "required": ["schema", "version", "units", "pillars"],
     "properties": {

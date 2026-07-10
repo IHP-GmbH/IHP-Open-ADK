@@ -147,6 +147,65 @@ def test_translated_die_is_misaligned(tmp_path, capsys):
     assert "5.000000" in out
 
 
+def test_moved_by_auto_resolve_demotes_to_warning(tmp_path, capsys):
+    """A named pair beyond tolerance whose pillar carries
+    moved_by_auto_resolve: true is the producer's own collision-resolver
+    shift, not a placement error: warning, exit 0."""
+    chiplet = write_chiplet(tmp_path, [make_die()])
+    pins = write_pinlist(tmp_path, [("A", 10.0, 5.0)])
+    manifest = write_manifest(tmp_path, [
+        make_pillar(pin_name="A", x=1015.0, y=505.0,  # 5 um off in x
+                    moved_by_auto_resolve=True),
+    ])
+    assert run_main(chiplet, manifest, "--pins", "U1=%s" % pins) == 0
+    captured = capsys.readouterr()
+    assert "MISALIGNED" not in captured.out
+    assert "moved_by_auto_resolve" in captured.err
+    assert "PASSED" in captured.out
+
+
+@pytest.mark.parametrize("extra", [{}, {"moved_by_auto_resolve": False}])
+def test_unmoved_pillar_beyond_tolerance_stays_misaligned(tmp_path, extra):
+    """Only an explicit true flag demotes; false or absent keeps the
+    finding."""
+    chiplet = write_chiplet(tmp_path, [make_die()])
+    pins = write_pinlist(tmp_path, [("A", 10.0, 5.0)])
+    manifest = write_manifest(tmp_path, [
+        make_pillar(pin_name="A", x=1015.0, y=505.0, **extra),
+    ])
+    assert run_main(chiplet, manifest, "--pins", "U1=%s" % pins) == 1
+
+
+def test_moved_pillar_within_tolerance_is_silent(tmp_path, capsys):
+    """A moved pillar that still lands within tolerance needs no warning."""
+    chiplet = write_chiplet(tmp_path, [make_die()])
+    pins = write_pinlist(tmp_path, [("A", 10.0, 5.0)])
+    manifest = write_manifest(tmp_path, [
+        make_pillar(pin_name="A", x=1010.5, y=505.0,
+                    moved_by_auto_resolve=True),
+    ])
+    assert run_main(chiplet, manifest, "--pins", "U1=%s" % pins) == 0
+    assert "moved_by_auto_resolve" not in capsys.readouterr().err
+
+
+def test_match_device_without_warnings_list_keeps_finding():
+    """Importer compatibility: no warnings list supplied -> the moved-flag
+    pair stays a MISALIGNED finding (legacy strict behavior)."""
+    pads = [{"name": "A", "x_um": 0.0, "y_um": 0.0}]
+    pillars = [make_pillar(pin_name="A", x=5.0, y=0.0,
+                           moved_by_auto_resolve=True)]
+    findings, matched = pvp.match_device("U1", pads, pillars,
+                                         tolerance_um=1.0)
+    assert matched == 1
+    assert [f["type"] for f in findings] == ["MISALIGNED"]
+    warnings = []
+    findings, matched = pvp.match_device("U1", pads, pillars,
+                                         tolerance_um=1.0,
+                                         warnings=warnings)
+    assert matched == 1 and findings == []
+    assert len(warnings) == 1 and "moved_by_auto_resolve" in warnings[0]
+
+
 @pytest.mark.parametrize("rotation", [90.0, 180.0, 270.0, 37.5])
 def test_rotation_transform(tmp_path, rotation):
     pads = [("A", 10.0, 5.0), ("B", -20.0, 15.0)]

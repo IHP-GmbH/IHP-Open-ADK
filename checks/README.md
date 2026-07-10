@@ -24,5 +24,9 @@ Per-die pad sources: a gds_to_kicad `*.pins.json` pin list (`--pins`), or
 extraction from the die's `.chiplet` layout GDS (`--gds-pads`; pad layers
 from `config/chiplet_pads.json`, requires the `klayout.db` Python module).
 Findings: `MISALIGNED`, `PAD_WITHOUT_PILLAR`, `PILLAR_WITHOUT_PAD`,
-`AMBIGUOUS_MATCH` (and `NO_PAD_SOURCE` with `--strict`). Exit codes: 0
-clean, 1 findings, 2 usage/validation/tooling errors.
+`AMBIGUOUS_MATCH` (and `NO_PAD_SOURCE` with `--strict`). A named pair
+beyond tolerance whose pillar is flagged `moved_by_auto_resolve: true`
+demotes to a warning: the producer's collision auto-resolve shifted that
+bump away from its pad on purpose, so the deviation is expected and must
+not fail the check. Exit codes: 0 clean, 1 findings, 2
+usage/validation/tooling errors.

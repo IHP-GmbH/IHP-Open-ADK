@@ -40,7 +40,9 @@ Pad sources per die (KiCad reference, e.g. ``U1``):
 Matching per device: by ``pin_name`` when both sides are named; entries
 where at least one side is unnamed fall back to greedy nearest-unique
 matching within tolerance. Findings: ``MISALIGNED`` (named match beyond
-tolerance), ``PAD_WITHOUT_PILLAR``, ``PILLAR_WITHOUT_PAD``,
+tolerance -- except pillars flagged ``moved_by_auto_resolve: true``, whose
+deviation is the producer's own collision auto-resolve shift and demotes to
+a warning), ``PAD_WITHOUT_PILLAR``, ``PILLAR_WITHOUT_PAD``,
 ``AMBIGUOUS_MATCH`` (nearest-unique fallback cannot decide), and -- with
 ``--strict`` -- ``NO_PAD_SOURCE`` for dies that declare a connection method
 but were given no pad source (a warning otherwise).
@@ -419,16 +421,26 @@ def _finding(kind: str, ref: str, message: str, **extra) -> Dict[str, Any]:
 
 def match_device(ref: str, pads: List[Dict[str, Any]],
                  pillars: List[Dict[str, Any]], *,
-                 tolerance_um: float = DEFAULT_TOLERANCE_UM
+                 tolerance_um: float = DEFAULT_TOLERANCE_UM,
+                 warnings: Optional[List[str]] = None
                  ) -> Tuple[List[Dict[str, Any]], int]:
     """Match one die's global-frame pads against its pillar entries.
 
     Named entries (both sides non-empty) match by exact pin name; a named
-    pair beyond tolerance is MISALIGNED. Two conflicting names never match
-    (they surface as PAD_WITHOUT_PILLAR + PILLAR_WITHOUT_PAD). Remaining
-    entries where at least one side is unnamed fall back to greedy
-    nearest-unique matching within tolerance; near-ties the fallback cannot
-    decide become AMBIGUOUS_MATCH. Returns (findings, matched_count).
+    pair beyond tolerance is MISALIGNED. Exception: when the pillar carries
+    ``moved_by_auto_resolve: true``, the producer's collision auto-resolve
+    shifted that bump away from its pad on purpose, so the deviation is
+    expected — with a ``warnings`` list supplied the pair is reported there
+    instead of as a finding (the CLI/run_check path); without one (legacy
+    importers) it stays a MISALIGNED finding. Unnamed moved pillars beyond
+    tolerance still surface as PAD_WITHOUT_PILLAR/PILLAR_WITHOUT_PAD
+    leftovers: without a name the pair cannot be attributed.
+
+    Two conflicting names never match (they surface as PAD_WITHOUT_PILLAR +
+    PILLAR_WITHOUT_PAD). Remaining entries where at least one side is
+    unnamed fall back to greedy nearest-unique matching within tolerance;
+    near-ties the fallback cannot decide become AMBIGUOUS_MATCH. Returns
+    (findings, matched_count).
     """
     findings: List[Dict[str, Any]] = []
     matched = 0
@@ -456,6 +468,15 @@ def match_device(ref: str, pads: List[Dict[str, Any]],
             pillar_free.discard(j)
             matched += 1
             if dist > tolerance_um:
+                if (warnings is not None
+                        and pillars[j].get("moved_by_auto_resolve") is True):
+                    warnings.append(
+                        "die %s: pillar %r sits %.6f um from pad %r "
+                        "(tolerance %.6f um) but is flagged "
+                        "moved_by_auto_resolve — the producer's collision "
+                        "auto-resolve shifted it on purpose; not a finding"
+                        % (ref, name, dist, name, tolerance_um))
+                    continue
                 findings.append(_finding(
                     "MISALIGNED", ref,
                     "pad %r sits %.6f um from its pillar (tolerance %.6f um)"
@@ -576,7 +597,8 @@ def run_check(assembly: Dict[str, Any], manifest: Dict[str, Any],
             continue
         pads_global = transform_pads(comp, die_pads[ref])
         device_findings, matched = match_device(
-            ref, pads_global, pillars, tolerance_um=tolerance_um)
+            ref, pads_global, pillars, tolerance_um=tolerance_um,
+            warnings=warnings)
         findings.extend(device_findings)
         devices[ref] = {
             "pads": len(pads_global),
