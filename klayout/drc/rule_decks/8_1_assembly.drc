@@ -14,6 +14,9 @@
 logger.info('ADK: starting assembly DRC checks')
 
 # Rule ASM.a -- chiplet boundaries must not overlap.
+# Single-tier assumption: chiplet_boundary is a flat 2D region (the boundary
+# manifest carries no z), so XY overlap is flagged even where dies at
+# different z would make it legal. See docs/architecture.md, Known limitations.
 logger.info('ADK: ASM.a')
 asm_a = chiplet_boundary.merged(2)
 asm_a.output('ASM.a', 'ASM.a : Chiplet boundaries must not overlap')

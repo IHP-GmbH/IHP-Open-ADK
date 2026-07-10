@@ -1,0 +1,50 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://heterogenic-chip-design-project/adk/config/schema/pillar_manifest.schema.json",
+    "title": "ADK pillar manifest",
+    "description": "Sidecar emitted next to an assembly GDS by the Cu-pillar/bump producer (hyp_to_gds). Carries one entry per pillar/bump instantiated in the assembly, with the as-drawn center rebased into the canonical interposer GDS-bbox-corner frame (the same frame .chiplet die positions use; y-up, micrometers, post collision auto-resolve). Consumed by manifest-level checks (checks/pads_vs_pillars.py); x_um/y_um are authoritative for those checks while the GDS remains fab ground truth.",
+    "type": "object",
+    "required": ["schema", "version", "units", "pillars"],
+    "properties": {
+        "schema": { "const": "adk-pillar-manifest" },
+        "version": { "type": "string" },
+        "generator": { "type": "string" },
+        "assembly_gds": { "type": "string" },
+        "units": { "const": "um" },
+        "pillars": {
+            "type": "array",
+            "description": "One entry per pillar/bump drawn in the assembly GDS; empty when the bump-generation path ran but produced no bumps.",
+            "items": {
+                "type": "object",
+                "required": ["device_ref", "pin_name", "method", "x_um", "y_um", "diameter_um"],
+                "properties": {
+                    "device_ref": { "type": "string", "minLength": 1 },
+                    "pin_name": {
+                        "type": "string",
+                        "description": "Pad/pin name; empty string when unknown."
+                    },
+                    "method": {
+                        "type": "string",
+                        "description": "Interconnect method id (e.g. cupillar_opt1)."
+                    },
+                    "x_um": { "type": "number" },
+                    "y_um": { "type": "number" },
+                    "diameter_um": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "description": "Bump body diameter for the method."
+                    },
+                    "moved_by_auto_resolve": {
+                        "type": "boolean",
+                        "description": "True when collision auto-resolve shifted this bump; the key is OMITTED when unknown."
+                    },
+                    "auto_resolve_shift_um": {
+                        "type": "number",
+                        "minimum": 0,
+                        "description": "Distance the bump was shifted by collision auto-resolve (frame-invariant, so unaffected by the rebase). Present only on shifted bumps; lets consumers bound the excused pad-to-pillar deviation to shift + tolerance instead of accepting any distance on the boolean flag."
+                    }
+                }
+            }
+        }
+    }
+}

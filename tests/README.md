@@ -83,6 +83,14 @@ expected. The in-image verify gate has the binary and runs everything.
   black-box chiplet layer registry (`pad_drawing` / `pad_text` / `outline`),
   against the registry schema.
 
+- `test_pads_vs_pillars.py`: the manifest-level pad-to-pillar alignment check
+  (`checks/pads_vs_pillars.py`). Synthesizes `.chiplet` assemblies, pillar
+  manifests, pin lists, and a die GDS on the `chiplet_pads.json` layers; pins
+  the placement transform (rotation, flip-chip mirror) against an independent
+  reference, the matching semantics and findings, exit codes, `--strict`, the
+  JSON report, and `--gds-pads` extraction. `importorskip`s PyYAML,
+  `jsonschema`, and `klayout.db` where needed.
+
 ## Migration equivalence gate
 
 The load-bearing invariant is that switching the boundary source must not change

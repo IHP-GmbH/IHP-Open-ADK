@@ -132,3 +132,25 @@ chiplet-internal pad vocabulary (`pad_drawing` 205/0, `pad_text` 205/25,
 the assembly check, but reinforces the "Why no chiplet adapter" reasoning: a
 black-box chiplet's outline is recorded in the boundary manifest, not mirrored
 onto a fab layer.
+
+## Known limitations
+
+- **ASM rules assume a single tier.** `chiplet_boundary` is a flat 2D region:
+  the boundary manifest records placement polygons with no z coordinate, and
+  `layers_def.drc` merges every polygon into one region with no per-die
+  identity. ASM.a therefore flags any XY overlap between chiplet boundaries,
+  including the (currently unsupported) case of dies legally stacked at
+  different z in a multi-tier assembly. The assumption is baked into the
+  manifest data model, not just the rule; lifting it would need a z-aware
+  manifest schema (version bump), per-die identity in `layers_def.drc`, and a
+  tier-aware ASM.a. The KiCad-side mirror (native courtyard collision) is
+  equally 2D. Not a practical constraint today: nothing in the toolchain
+  produces multi-tier assemblies.
+- **Die z consistency is checked at export, not in the deck.** The KLayout
+  deck sees only 2D geometry plus the manifest. The rule "per-die
+  `position.z` == mounting surface + connection-stack height" is enforced by
+  the 3Dblox exporter (`openroad/chiplet2dbx.py`, exact within 1e-6 um),
+  which refuses to export inconsistent assemblies; downstream, OpenROAD's
+  `check_3dblox` re-verifies gap/thickness equality, floating dies, and 3D
+  overlap on the exported model. Assemblies that are never exported get no
+  automated z check.

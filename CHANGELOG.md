@@ -8,6 +8,21 @@ match the latest released entry.
 
 Landed since 0.2.0, not yet tied to a contract bump.
 
+- Added `checks/pads_vs_pillars.py`, a manifest-level check that verifies die
+  pad positions against the interposer's as-drawn Cu-pillar/bump positions
+  from the new `<gds-stem>.pillars.json` sidecar (pillar manifest, schema
+  `config/schema/pillar_manifest.schema.json`, documented in
+  `docs/pillar_manifest.md`; produced by hyp_to_gds alongside the boundary
+  manifest, exact-version pinned by the reader). Pad sources: gds_to_kicad
+  `*.pins.json` pin lists or extraction from the die layout GDS using the
+  `config/chiplet_pads.json` layer vocabulary. Matching by pin name with a
+  nearest-unique fallback; findings `MISALIGNED`, `PAD_WITHOUT_PILLAR`,
+  `PILLAR_WITHOUT_PAD`, `AMBIGUOUS_MATCH` (plus `NO_PAD_SOURCE` under
+  `--strict`). Pillars the producer's collision auto-resolve moved are
+  demoted to warnings, bounded by the optional `auto_resolve_shift_um`
+  magnitude the manifest records (a deviation beyond shift + tolerance stays
+  `MISALIGNED`). Rejects a non-`um` assembly and non-finite/negative
+  tolerances rather than passing silently.
 - Added `openroad/chiplet2dbx.py`: exports a finalized `.chiplet` assembly to
   3Dblox (`.3dbv` + `.3dbx` + minimal per-technology LEFs) for OpenROAD's
   `read_3dbx` / `check_3dblox`. Geometric and lossy by declaration; verifies
