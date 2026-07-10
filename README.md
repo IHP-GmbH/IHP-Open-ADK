@@ -28,6 +28,11 @@ Both axes are interposer-agnostic: the deck consumes abstract layer names that
 an adapter maps to PDK-specific fabrication layers. Chiplet boundaries are not
 read from a fab layer; they come from a boundary manifest sidecar (see below).
 
+On top of the DRC deck, a manifest-level check (`checks/pads_vs_pillars.py`)
+verifies that each die's pad positions line up with the interposer's as-drawn
+Cu-pillar/bump positions, read from the `<gds-stem>.pillars.json` sidecar
+(see `docs/pillar_manifest.md`).
+
 ## Current scope
 
 - KLayout assembly DRC deck, split into per-axis rule decks under
@@ -50,6 +55,7 @@ read from a fab layer; they come from a boundary manifest sidecar (see below).
 ## Layout
 
 ```
+checks/                  Manifest-level checks (pads_vs_pillars)
 config/                  Layer, rule-param, interconnect registries + schema/
 klayout/                 DRC deck (adk_assembly.drc), runner, rule_decks/, macros/
 kicad/                   KiCad DRU generator and templates
@@ -59,7 +65,7 @@ vendor/                  Vendored chiplet_format_io reference reader
 thermal/ power/ timing/  Reserved for future ADK domains (README stubs only)
 tests/                   Regression fixtures and golden references
 docs/                    Architecture, layer registry, adapter contract,
-                         boundary manifest, integration
+                         boundary manifest, pillar manifest, integration
 ```
 
 ## Running the assembly DRC
@@ -96,6 +102,22 @@ The `--interposer-adapter` flag selects which adapter under
 selects one under `pdk_adapters/interconnect/`. Each accepts a shortname or an
 explicit `.drc` path. Every adapter MUST declare the abstract inputs documented
 in `docs/adapter_contract.md`; the deck validates this before evaluating rules.
+
+## Checking pad-to-pillar alignment
+
+```bash
+python checks/pads_vs_pillars.py --chiplet <design.chiplet> \
+    --pillars <assembly>.pillars.json \
+    [--pins U1=chiplets/die_a.pins.json ...] [--gds-pads U2 ...] \
+    [--tolerance-um 1.0] [--json report.json] [--strict]
+```
+
+Transforms each die's pad centers through its `.chiplet` placement
+(position, rotation, flip-chip mirror) and matches them against the as-drawn
+pillar centers in the pillar manifest, by pin name where available and by
+nearest-unique fallback otherwise. Exit codes: 0 clean, 1 findings, 2
+usage/validation errors. See `checks/README.md` and
+`docs/pillar_manifest.md`.
 
 ## Exporting to OpenROAD 3Dblox
 
