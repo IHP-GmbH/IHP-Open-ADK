@@ -22,6 +22,10 @@ from pathlib import Path
 
 import pytest
 
+# The exporter's vendored chiplet_format_io reader needs PyYAML. Skip this
+# module (instead of erroring the whole collection) where it is missing.
+pytest.importorskip("yaml", reason="chiplet2dbx needs PyYAML")
+
 ADK_ROOT = Path(__file__).resolve().parents[1]
 if str(ADK_ROOT / "openroad") not in sys.path:
     sys.path.insert(0, str(ADK_ROOT / "openroad"))

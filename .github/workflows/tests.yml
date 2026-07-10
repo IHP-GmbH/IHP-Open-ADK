@@ -20,7 +20,9 @@ jobs:
           cache-dependency-path: .github/workflows/tests.yml
 
       - name: Install Python dependencies
-        run: pip install pytest klayout jinja2 jsonschema
+        # pyyaml: the vendored chiplet_format_io reader used by the
+        # chiplet2dbx exporter parses .chiplet (YAML) with it.
+        run: pip install pytest klayout jinja2 jsonschema pyyaml
 
       - name: Install KLayout CLI
         # The DRC-deck tests shell out to `klayout -b`; the pip `klayout` wheel
