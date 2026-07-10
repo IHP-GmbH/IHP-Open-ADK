@@ -1,0 +1,5 @@
+# Bump map for ChipletDef DIE_A__bump25 (method bump25); derived from unit_demo.chiplet by chiplet2dbx (ADK).
+# bumpInstName bumpCellType x y portName netName  (x/y = bump center, def-local um)
+A0 BUMP_BUMP25 250 50 - -
+A0_2 BUMP_BUMP25 50 50 - -
+VDD BUMP_BUMP25 150 160 VDD VDD_NET

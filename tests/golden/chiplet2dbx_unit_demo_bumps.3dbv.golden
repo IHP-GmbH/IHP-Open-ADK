@@ -1,0 +1,72 @@
+# Derived from unit_demo.chiplet by chiplet2dbx (ADK); regenerate, do not edit.
+Header:
+  version: 3
+  unit: micron
+  precision: 1000
+
+ChipletDef:
+  DIE_A__bump25:
+    type: die
+    design_area: [300, 200]
+    thickness: 150
+    external:
+      APR_tech_file: [techb.lef]
+      LEF_file: [bump25__techb.lef]
+    regions:
+      front:
+        side: front
+        bmap: DIE_A__bump25.bmap
+        coords:
+          - [0, 0]
+          - [300, 0]
+          - [300, 200]
+          - [0, 200]
+      back:
+        side: back
+        coords:
+          - [0, 0]
+          - [300, 0]
+          - [300, 200]
+          - [0, 200]
+  DIE_B:
+    type: die
+    design_area: [200, 200]
+    thickness: 100
+    external:
+      APR_tech_file: [techb.lef]
+    regions:
+      front:
+        side: front
+        coords:
+          - [0, 0]
+          - [200, 0]
+          - [200, 200]
+          - [0, 200]
+      back:
+        side: back
+        coords:
+          - [0, 0]
+          - [200, 0]
+          - [200, 200]
+          - [0, 200]
+  SUBSTRATE:
+    type: substrate
+    design_area: [1000, 800]
+    thickness: 10
+    external:
+      APR_tech_file: [techa.lef]
+    regions:
+      front:
+        side: front
+        coords:
+          - [0, 0]
+          - [1000, 0]
+          - [1000, 800]
+          - [0, 800]
+      back:
+        side: back
+        coords:
+          - [0, 0]
+          - [1000, 0]
+          - [1000, 800]
+          - [0, 800]

@@ -84,6 +84,26 @@ def base_assembly():
     }
 
 
+def d1_pins():
+    """Synthetic pin list for D1 (die-local GDS um; duplicate name on purpose)."""
+    return [
+        {"name": "A0", "x_um": -100.0, "y_um": -50.0},
+        {"name": "A0", "x_um": 100.0, "y_um": -50.0},
+        {"name": "VDD", "x_um": 0.0, "y_um": 60.0},
+    ]
+
+
+def bump_assembly():
+    """base_assembly plus a netlist block binding D1's VDD pin."""
+    assembly = base_assembly()
+    assembly["netlist"] = {"nets": [
+        {"name": "VDD_NET",
+         "connections": [{"component": "D1", "pin": "VDD",
+                          "layer": "TopMetal2"}]},
+    ]}
+    return assembly
+
+
 # ---------------------------------------------------------------- goldens
 
 def test_render_3dbv_golden():
@@ -100,6 +120,26 @@ def test_render_3dbx_golden():
 def test_render_tech_lef_golden():
     golden = (GOLDEN_DIR / "chiplet2dbx_tech.lef.golden").read_text()
     assert chiplet2dbx.render_tech_lef(1000) == golden, REGOLDEN_HINT
+
+
+def test_render_3dbv_bumps_golden():
+    golden = (GOLDEN_DIR / "chiplet2dbx_unit_demo_bumps.3dbv.golden").read_text()
+    rendered = chiplet2dbx.render_3dbv(bump_assembly(),
+                                       die_pins={"D1": d1_pins()})
+    assert rendered == golden, REGOLDEN_HINT
+
+
+def test_render_bmap_golden():
+    golden = (GOLDEN_DIR / "chiplet2dbx_unit_demo.bmap.golden").read_text()
+    rendered = chiplet2dbx.render_bmap(bump_assembly(), "DIE_A__bump25",
+                                       die_pins={"D1": d1_pins()})
+    assert rendered == golden, REGOLDEN_HINT
+
+
+def test_render_tech_lef_route_layer_golden():
+    golden = (GOLDEN_DIR / "chiplet2dbx_tech_route.lef.golden").read_text()
+    rendered = chiplet2dbx.render_tech_lef(1000, "BUMP_ATTACH")
+    assert rendered == golden, REGOLDEN_HINT
 
 
 # ------------------------------------------------------------- semantics
@@ -219,6 +259,86 @@ def test_interposer_count_enforced():
         chiplet2dbx.render_3dbv(assembly)
 
 
+# ----------------------------------------------------------- bump maps
+
+def test_bump_rows_mirror_and_bind():
+    text = chiplet2dbx.render_bmap(bump_assembly(), "DIE_A__bump25",
+                                   die_pins={"D1": d1_pins()})
+    # flip_chip pre-mirrors x: pin (-100,-50) on a 300x200 die -> (250, 50);
+    # the duplicate name gets a suffix.
+    assert "A0 BUMP_BUMP25 250 50 - -" in text
+    assert "A0_2 BUMP_BUMP25 50 50 - -" in text
+    # netlist-bound pin emits port + net
+    assert "VDD BUMP_BUMP25 150 160 VDD VDD_NET" in text
+
+
+def test_bump_rows_face_up_not_mirrored():
+    assembly = bump_assembly()
+    assembly["components"][1]["orientation"] = "face_up"
+    text = chiplet2dbx.render_bmap(assembly, "DIE_A__bump25",
+                                   die_pins={"D1": d1_pins()})
+    assert "A0 BUMP_BUMP25 50 50 - -" in text
+
+
+def test_def_splits_by_method_with_pins():
+    assembly = bump_assembly()
+    clone = copy.deepcopy(assembly["components"][1])
+    clone["id"] = "D3"
+    clone["connection"] = "bump40"
+    clone["position"] = {"x": 250.0, "y": 650.0, "z": 50.0}
+    assembly["components"].append(clone)
+    pins = {"D1": d1_pins(), "D3": d1_pins()}
+    dbv = chiplet2dbx.render_3dbv(assembly, die_pins=pins)
+    assert "  DIE_A__bump25:" in dbv
+    assert "  DIE_A__bump40:" in dbv
+    assert "LEF_file: [bump25__techb.lef]" in dbv
+    assert "LEF_file: [bump40__techb.lef]" in dbv
+
+
+def test_shared_def_requires_identical_pins():
+    # no netlist block: both dies bind identically, so they share a def
+    assembly = base_assembly()
+    clone = copy.deepcopy(assembly["components"][1])
+    clone["id"] = "D3"
+    clone["position"] = {"x": 250.0, "y": 650.0, "z": 35.0}
+    assembly["components"].append(clone)
+    other = d1_pins()
+    other[0]["x_um"] = -90.0
+    with pytest.raises(ExportError, match="different pin lists"):
+        chiplet2dbx.render_3dbv(
+            assembly, die_pins={"D1": d1_pins(), "D3": other})
+
+
+def test_pin_outside_outline_fails():
+    pins = d1_pins()
+    pins.append({"name": "FAR", "x_um": 400.0, "y_um": 0.0})
+    with pytest.raises(ExportError, match="FAR"):
+        chiplet2dbx.render_3dbv(bump_assembly(), die_pins={"D1": pins})
+
+
+def test_pins_for_unknown_ref_fail():
+    with pytest.raises(ExportError, match="unknown die refs"):
+        chiplet2dbx.render_3dbv(bump_assembly(), die_pins={"D9": d1_pins()})
+
+
+def test_pins_without_connection_fail():
+    assembly = bump_assembly()
+    del assembly["components"][1]["connection"]
+    with pytest.raises(ExportError, match="no connection method"):
+        chiplet2dbx.render_3dbv(assembly, die_pins={"D1": d1_pins()})
+
+
+def test_macro_naming_matches_generator():
+    """adk's bmap cell column must match the interconnect PDK generator."""
+    try:
+        generator = chiplet2dbx._bump_lef_generator()
+    except ExportError:
+        pytest.skip("interconnect_pdk sibling checkout not available")
+    for method in ("cupillar_opt1", "vendorx_microbump", "bump25"):
+        assert chiplet2dbx._bump_macro_name(method) == \
+            generator.bump_macro_name(method)
+
+
 # ------------------------------------------------------------------- CLI
 
 def test_cli_roundtrip(tmp_path):
@@ -317,13 +437,18 @@ def test_live_check_3dblox_synthetic(tmp_path):
     _assert_clean(_run_openroad(tmp_path, dbx.name))
 
 
-@needs_openroad_image
-def test_live_check_3dblox_wire_bond_demo(tmp_path):
+def _demo_chiplet_path():
     env = os.environ.get("CHIPLET2DBX_DEMO_CHIPLET")
     demo = Path(env) if env else (
         ADK_ROOT.parent / "kicad_designs" / "interposer_wire_bonding_demo"
         / "interposer_wire_bonding_demo.chiplet")
-    if not demo.is_file():
+    return demo if demo.is_file() else None
+
+
+@needs_openroad_image
+def test_live_check_3dblox_wire_bond_demo(tmp_path):
+    demo = _demo_chiplet_path()
+    if demo is None:
         pytest.skip("wire-bond demo .chiplet not available")
     assembly = chiplet2dbx.load_chiplet(demo)
     dbv, dbx, _ = chiplet2dbx.export_3dblox(assembly, tmp_path)
@@ -340,3 +465,77 @@ def test_live_linter_sees_geometry(tmp_path):
     output = _run_openroad(tmp_path, dbx.name)
     assert "ODB-0207" in output, output
     assert "ODB-0273" in output, output
+
+
+def _export_with_bumps(assembly, tmp_path, die_pins):
+    try:
+        return chiplet2dbx.export_3dblox(assembly, tmp_path,
+                                         die_pins=die_pins)
+    except ExportError as exc:
+        if "bump LEF generator" in str(exc):
+            pytest.skip("interconnect_pdk sibling checkout not available")
+        raise
+
+
+def live_bump_assembly():
+    """bump_assembly rebased onto a real manifest method: the bump macro
+    LEF is manifest-driven, so live runs need a method the interconnect
+    PDK actually defines."""
+    assembly = bump_assembly()
+    assembly["connection_stacks"]["cupillar_opt1"] = {"layers": [
+        {"name": "CuPillar", "material": "Cu", "height": 28.0,
+         "diameter": 44.0},
+        {"name": "SnAgCap", "material": "SnAg", "height": 16.0,
+         "diameter": 44.0},
+    ]}
+    d1 = assembly["components"][1]
+    d1["connection"] = "cupillar_opt1"
+    d1["position"]["z"] = 54.0  # 10 (mount) + 44 (stack)
+    return assembly
+
+
+@needs_openroad_image
+def test_live_check_3dblox_with_bumps(tmp_path):
+    dbv, dbx, extra = _export_with_bumps(
+        live_bump_assembly(), tmp_path, {"D1": d1_pins()})
+    assert any(p.suffix == ".bmap" for p in extra)
+    _assert_clean(_run_openroad(tmp_path, dbx.name))
+
+
+@needs_openroad_image
+def test_live_bump_alignment_sees_bumps(tmp_path):
+    """Negative control: a bump outside its region must trip ODB-0463."""
+    dbv, dbx, extra = _export_with_bumps(
+        live_bump_assembly(), tmp_path, {"D1": d1_pins()})
+    bmap = next(p for p in extra if p.suffix == ".bmap")
+    bmap.write_text(bmap.read_text().replace(
+        "A0 BUMP_CUPILLAR_OPT1 250 50", "A0 BUMP_CUPILLAR_OPT1 5000 50"))
+    output = _run_openroad(tmp_path, dbx.name)
+    assert "ODB-0463" in output, output
+
+
+def test_unknown_manifest_method_fails_loudly(tmp_path):
+    """A .chiplet stack id absent from the interconnect manifest cannot
+    get a bump macro; the export must say so instead of guessing."""
+    try:
+        chiplet2dbx._bump_lef_generator()
+    except ExportError:
+        pytest.skip("interconnect_pdk sibling checkout not available")
+    with pytest.raises(ExportError, match="not in the interconnect PDK"):
+        chiplet2dbx.export_3dblox(bump_assembly(), tmp_path,
+                                  die_pins={"D1": d1_pins()})
+
+
+@needs_openroad_image
+def test_live_check_3dblox_demo_with_bumps(tmp_path):
+    demo = _demo_chiplet_path()
+    pins = os.environ.get("CHIPLET2DBX_DEMO_PINS")
+    pins = Path(pins) if pins else (
+        ADK_ROOT.parent / "adk-tools" / "examples" / "two_die_interposer"
+        / "chiplets" / "metal_test_chiplet.pins.json")
+    if demo is None or not pins.is_file():
+        pytest.skip("wire-bond demo .chiplet or pins.json not available")
+    assembly = chiplet2dbx.load_chiplet(demo)
+    dbv, dbx, _ = _export_with_bumps(
+        assembly, tmp_path, {"U1": pins, "U2": pins})
+    _assert_clean(_run_openroad(tmp_path, dbx.name))
