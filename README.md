@@ -7,6 +7,9 @@ chiplet dies remain ordinary PDKs.
 
 ## Status
 
+> [!WARNING]
+> ADK is currently a preview release only!
+
 `v0.2.0`. The KLayout assembly DRC, its runner, the KiCad DRU generator, and the
 IHP interposer adapter are implemented and exercised by the regression suite.
 The migration out of the interposer-coupled implementation is still settling, so
