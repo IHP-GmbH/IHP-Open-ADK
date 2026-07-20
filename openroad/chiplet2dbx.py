@@ -155,7 +155,16 @@ def _precision(assembly: Dict[str, Any]) -> int:
 
 def _rotation_quarter(comp: Dict[str, Any]) -> int:
     """rotation.z normalized to one of 0/90/180/270; loud on anything else."""
-    rotation = float((comp.get("rotation") or {}).get("z", 0.0)) % 360.0
+    rot = comp.get("rotation") or {}
+    try:
+        rotation = float(rot.get("z", 0.0)) % 360.0
+    except (AttributeError, TypeError, ValueError):
+        # Malformed rotation (non-dict container, or non-numeric z) surfaces
+        # as a clean ExportError ("chiplet2dbx: error: ...", exit 1) instead
+        # of a raw traceback. This exporter has no exit-2 tier by design.
+        raise ExportError(
+            "component %r has a non-numeric/malformed rotation.z"
+            % comp.get("id")) from None
     nearest = round(rotation / 90.0) * 90.0
     if abs(rotation - nearest) > 1e-6:
         raise ExportError(
@@ -174,11 +183,12 @@ def _orient_token(comp: Dict[str, Any], quarter: int) -> str:
         return "MZ" if quarter == 0 else "MZ_%s" % _ROTATION_TOKENS[quarter]
     if orientation == "face_down":
         raise ExportError(
-            "component %r uses orientation face_down, which the interop "
-            "mapping deliberately leaves unmapped" % comp.get("id")
+            "component %r uses orientation face_down, which is not a canonical "
+            "orientation token; use flip_chip" % comp.get("id")
         )
     raise ExportError(
-        "component %r has unknown orientation %r" % (comp.get("id"), orientation)
+        "component %r has unknown orientation %r (expected face_up or "
+        "flip_chip)" % (comp.get("id"), orientation)
     )
 
 
@@ -331,6 +341,33 @@ def _technology_of(comp: Dict[str, Any]) -> str:
     return str(technology)
 
 
+def _check_die_anchor(comp: Dict[str, Any]) -> None:
+    """Die bumps are exported die-local plus the die ``position`` (the
+    ``gds_origin`` anchor; see the module docstring). A die declaring
+    ``bbox_center`` would need its bumps re-centered on the die GDS bbox first,
+    which this exporter does not do, so it is a hard error rather than a silent
+    bbox-corner misplacement. An absent anchor is also a hard error: the frame
+    contract (coord_frame_contract.md 2.2) defaults it to ``bbox_center``
+    (unsupported here), so the die must declare ``anchor: gds_origin``
+    explicitly (which every gds_to_kicad die and the plugin writer emit)."""
+    anchor = comp.get("anchor")
+    if anchor == "gds_origin":
+        return
+    if anchor is None:
+        raise ExportError(
+            "die %r has no 'anchor' field. The frame contract defaults an "
+            "absent anchor to bbox_center, which this exporter does not "
+            "support; declare anchor: gds_origin explicitly." % comp.get("id"))
+    if anchor == "bbox_center":
+        raise ExportError(
+            "die %r declares anchor bbox_center, which this exporter does not "
+            "support: it emits die-local bumps at the gds_origin anchor. "
+            "Re-anchor the die to gds_origin." % comp.get("id"))
+    raise ExportError(
+        "die %r has unknown anchor %r (expected gds_origin or bbox_center)"
+        % (comp.get("id"), anchor))
+
+
 def _split_components(assembly: Dict[str, Any]):
     interposers = []
     dies = []
@@ -339,6 +376,7 @@ def _split_components(assembly: Dict[str, Any]):
         if ctype == "interposer":
             interposers.append(comp)
         elif ctype == "die":
+            _check_die_anchor(comp)
             dies.append(comp)
         else:
             raise ExportError(

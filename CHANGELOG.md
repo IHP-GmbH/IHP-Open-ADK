@@ -8,6 +8,25 @@ match the latest released entry.
 
 Landed since 0.2.0, not yet tied to a contract bump.
 
+- Hardened the frame-contract handling shared with the interposer pipeline.
+  `checks/pads_vs_pillars.py` now validates each die's `anchor:`: it supports
+  only `gds_origin` (die-local pads + `position`, its existing transform); a die
+  declaring `bbox_center`, an unknown anchor, or NO `anchor:` is a hard error
+  (exit 2) instead of a silent bbox-corner misplacement that could flip a match
+  to open. Absent is rejected rather than assumed because the frame contract
+  (`coord_frame_contract.md` 2.2) defaults an absent anchor to `bbox_center`
+  (which this check cannot consume), so a die must declare `anchor: gds_origin`
+  explicitly -- which every gds_to_kicad die and the plugin writer already
+  emit. It also guards the die `rotation.z` parse (a non-numeric/malformed
+  rotation is exit 2, not an uncaught exception leaking to exit 1 and colliding
+  with the findings tier), and `main()` runs the whole pipeline -- check AND
+  report emission -- inside one guard with an unexpected-exception catch-all, so
+  exit 1 is structurally reachable only via the deliberate findings return.
+  `openroad/chiplet2dbx.py` gets the same die-anchor guard (`bbox_center`/
+  unknown/absent -> `ExportError`) and wraps its `rotation.z` parse into a clean
+  `ExportError` (keeps its 0/1 exporter contract). Both tools reject the
+  non-canonical `face_down` orientation token pointing at `flip_chip` (the
+  frame contract defines only `face_up` and `flip_chip`).
 - Added `checks/pads_vs_pillars.py`, a manifest-level check that verifies die
   pad positions against the interposer's as-drawn Cu-pillar/bump positions
   from the new `<gds-stem>.pillars.json` sidecar (pillar manifest, schema

@@ -36,7 +36,8 @@ PADS_CONFIG = json.loads(
 # ---------------------------------------------------------------------------
 
 def make_die(ref="U1", x=1000.0, y=500.0, rotation=0.0,
-             orientation=None, connection="cupillar_opt1", layout=None):
+             orientation=None, connection="cupillar_opt1", layout=None,
+             anchor="gds_origin"):
     die = {
         "id": ref,
         "type": "die",
@@ -49,6 +50,8 @@ def make_die(ref="U1", x=1000.0, y=500.0, rotation=0.0,
         die["orientation"] = orientation
     if layout:
         die["layout"] = layout
+    if anchor is not None:
+        die["anchor"] = anchor
     return die
 
 
@@ -294,12 +297,90 @@ def test_flip_chip_mirror(tmp_path, rotation):
     assert run_main(chiplet, bad, "--pins", "U1=%s" % pins) == 1
 
 
-def test_face_down_is_a_hard_error(tmp_path):
+def test_face_down_is_a_hard_error(tmp_path, capsys):
     chiplet = write_chiplet(
         tmp_path, [make_die(orientation="face_down")])
     pins = write_pinlist(tmp_path, [("A", 10.0, 5.0)])
     manifest = write_manifest(tmp_path, [make_pillar(pin_name="A")])
     assert run_main(chiplet, manifest, "--pins", "U1=%s" % pins) == 2
+    assert "flip_chip" in capsys.readouterr().err  # points at the canonical token
+
+
+def test_die_anchor_bbox_center_is_a_hard_error(tmp_path, capsys):
+    """A die declaring anchor bbox_center cannot be checked with the
+    gds_origin die-local transform; it must be a loud error (exit 2), not a
+    silent bbox-corner misplacement that can flip a match to open."""
+    die = make_die(anchor="bbox_center")
+    chiplet = write_chiplet(tmp_path, [die])
+    pins = write_pinlist(tmp_path, [("A", 10.0, 5.0)])
+    manifest = write_manifest(tmp_path, [make_pillar(pin_name="A", x=1010.0, y=505.0)])
+    assert run_main(chiplet, manifest, "--pins", "U1=%s" % pins) == 2
+    assert "bbox_center" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("bad_anchor", ["corner", "", {"x": 0}, 3])
+def test_die_anchor_unknown_is_a_hard_error(tmp_path, bad_anchor):
+    """Any non-{gds_origin,bbox_center} anchor value -- including an empty
+    string or a non-string -- is a validation error (exit 2)."""
+    die = make_die(anchor=bad_anchor)
+    chiplet = write_chiplet(tmp_path, [die])
+    pins = write_pinlist(tmp_path, [("A", 10.0, 5.0)])
+    manifest = write_manifest(tmp_path, [make_pillar(pin_name="A", x=1010.0, y=505.0)])
+    assert run_main(chiplet, manifest, "--pins", "U1=%s" % pins) == 2
+
+
+def test_die_anchor_gds_origin_passes(tmp_path):
+    die = make_die(anchor="gds_origin")
+    chiplet = write_chiplet(tmp_path, [die])
+    pins = write_pinlist(tmp_path, [("A", 10.0, 5.0), ("B", -10.0, 5.0)])
+    manifest = write_manifest(tmp_path, [
+        make_pillar(pin_name="A", x=1010.0, y=505.0),
+        make_pillar(pin_name="B", x=990.0, y=505.0),
+    ])
+    assert run_main(chiplet, manifest, "--pins", "U1=%s" % pins) == 0
+
+
+def test_die_anchor_absent_is_a_hard_error(tmp_path, capsys):
+    """No anchor -> hard error (exit 2). The frame contract defaults an absent
+    anchor to bbox_center (unsupported here), so the die must declare
+    gds_origin explicitly rather than be silently assumed and risk misplacing a
+    genuine legacy bbox_center die."""
+    chiplet = write_chiplet(tmp_path, [make_die(anchor=None)])  # no anchor field
+    pins = write_pinlist(tmp_path, [("A", 10.0, 5.0)])
+    manifest = write_manifest(tmp_path, [make_pillar(pin_name="A", x=1010.0, y=505.0)])
+    assert run_main(chiplet, manifest, "--pins", "U1=%s" % pins) == 2
+    assert "anchor" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("rot", [{"z": "90deg"}, {"z": "not-a-number"},
+                                 [0, 0, 90], {"z": None}])
+def test_malformed_die_rotation_exits_2(tmp_path, rot, capsys):
+    """A die with a pad source but a non-numeric/malformed rotation is a
+    validation error (exit 2), never a raw traceback at exit 1 colliding with
+    the findings tier."""
+    die = make_die()
+    die["rotation"] = rot  # bypass make_die's always-numeric rotation.z
+    chiplet = write_chiplet(tmp_path, [die])
+    pins = write_pinlist(tmp_path, [("A", 10.0, 5.0)])
+    manifest = write_manifest(tmp_path, [make_pillar(pin_name="A", x=1010.0, y=505.0)])
+    assert run_main(chiplet, manifest, "--pins", "U1=%s" % pins) == 2
+    assert "pads_vs_pillars: error:" in capsys.readouterr().err
+
+
+def test_unexpected_exception_exits_2_not_1(tmp_path, monkeypatch, capsys):
+    """A stray non-CheckError bug in the pipeline must exit 2 (tooling error)
+    with a traceback, never 1 -- exit 1 is reserved for design findings."""
+    chiplet = write_chiplet(tmp_path, [make_die()])
+    pins = write_pinlist(tmp_path, [("A", 10.0, 5.0)])
+    manifest = write_manifest(tmp_path, [make_pillar(pin_name="A", x=1010.0, y=505.0)])
+
+    def _boom(*a, **k):
+        raise RuntimeError("synthetic tool bug")
+    monkeypatch.setattr(pvp, "run_check", _boom)
+    assert run_main(chiplet, manifest, "--pins", "U1=%s" % pins) == 2
+    err = capsys.readouterr().err
+    assert "unexpected failure" in err
+    assert "RuntimeError" in err  # traceback preserved
 
 
 # ---------------------------------------------------------------------------

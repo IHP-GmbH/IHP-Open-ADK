@@ -27,7 +27,19 @@ check therefore maps a die-local pad ``p`` to::
     global = position + R(rotation.z) * M * p
 
 with ``M = diag(-1, 1)`` for ``flip_chip`` and identity for ``face_up``.
-``face_down`` is unmapped and a hard error (same policy as chiplet2dbx).
+``face_down`` is not a canonical orientation token (the frame contract
+defines only ``face_up`` and ``flip_chip``) and is a hard error; use
+``flip_chip`` (same policy as chiplet2dbx).
+
+This check consumes dies in the ``gds_origin`` anchor: die-local pads plus
+the die ``position`` are compared directly against the rebased pillar
+manifest. A die that declares ``anchor: bbox_center`` would need its pads
+re-centered on the die GDS bbox before the transform, which this check does
+not do, so such a die is a hard error rather than a silent 82 um-class
+misplacement. An absent ``anchor:`` is also a hard error: the frame contract
+defaults it to ``bbox_center`` (unsupported here), so a die must declare
+``anchor: gds_origin`` explicitly -- which every gds_to_kicad die and the
+plugin writer already emit.
 
 Pad sources per die (KiCad reference, e.g. ``U1``):
 
@@ -77,6 +89,7 @@ import math
 import os
 import re
 import sys
+import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -380,6 +393,44 @@ def extract_gds_pads(gds_path, *, pads_config_path=None
     return pads
 
 
+def _check_die_anchor(comp: Dict[str, Any]) -> None:
+    """Validate a die's ``anchor:`` before its pads are transformed.
+
+    This check maps die-local pads with ``global = position + R * M * pad``,
+    which is the ``gds_origin`` anchor: the die GDS (0, 0) is the placement
+    reference. A die declaring ``bbox_center`` would need its pads re-centered
+    on the die GDS bbox first; not doing so shifts every pad by the bbox-corner
+    offset (an 82 um-class error that can flip a match to open with no signal),
+    so it is a hard error here.
+
+    An absent ``anchor:`` is also a hard error. The frame contract
+    (coord_frame_contract.md 2.2) says a reader defaults an absent anchor to
+    ``bbox_center`` -- which this check does not support -- so rather than
+    guess ``gds_origin`` and risk misplacing a genuine legacy ``bbox_center``
+    die, the die must declare ``anchor: gds_origin`` explicitly (which every
+    gds_to_kicad die and the plugin writer already emit).
+    """
+    anchor = comp.get("anchor")
+    if anchor == "gds_origin":
+        return
+    if anchor is None:
+        raise CheckError(
+            "die %r has no 'anchor' field. The frame contract defaults an "
+            "absent anchor to bbox_center, which this check does not support; "
+            "declare anchor: gds_origin explicitly (gds_to_kicad dies and the "
+            "plugin writer already do)." % comp.get("id"))
+    if anchor == "bbox_center":
+        raise CheckError(
+            "die %r declares anchor bbox_center, which this check does not "
+            "support: it compares die-local pads at the gds_origin anchor, so "
+            "bbox_center pads would be misplaced by the die GDS bbox-corner "
+            "offset. Re-anchor the die to gds_origin or supply gds_origin "
+            "pads." % comp.get("id"))
+    raise CheckError(
+        "die %r has unknown anchor %r (expected gds_origin or bbox_center)"
+        % (comp.get("id"), anchor))
+
+
 def _die_placement(comp: Dict[str, Any]) -> Tuple[float, float, float, bool]:
     """(x, y, rotation_deg, mirrored) of a die; loud on face_down/unknown."""
     pos = comp.get("position") or {}
@@ -389,7 +440,16 @@ def _die_placement(comp: Dict[str, Any]) -> Tuple[float, float, float, bool]:
         raise CheckError(
             "die %r has no usable position.x/y; cannot place its pads"
             % comp.get("id")) from None
-    rotation = float((comp.get("rotation") or {}).get("z", 0.0))
+    rot = comp.get("rotation") or {}
+    try:
+        rotation = float(rot.get("z", 0.0))
+    except (AttributeError, TypeError, ValueError):
+        # rotation is a non-dict (e.g. a list) or rotation.z is non-numeric
+        # (e.g. "90deg" / null). A malformed field is a validation error
+        # (exit 2), never a silent exit-1 collision with the findings tier.
+        raise CheckError(
+            "die %r has a non-numeric/malformed rotation.z; cannot place "
+            "its pads" % comp.get("id")) from None
     orientation = comp.get("orientation", "face_up")
     if orientation == "face_up":
         mirrored = False
@@ -397,13 +457,13 @@ def _die_placement(comp: Dict[str, Any]) -> Tuple[float, float, float, bool]:
         mirrored = True
     elif orientation == "face_down":
         raise CheckError(
-            "die %r uses orientation face_down, which this check "
-            "deliberately leaves unmapped (same policy as chiplet2dbx)"
+            "die %r uses orientation face_down, which is not a canonical "
+            "orientation token; use flip_chip (same policy as chiplet2dbx)"
             % comp.get("id"))
     else:
         raise CheckError(
-            "die %r has unknown orientation %r"
-            % (comp.get("id"), orientation))
+            "die %r has unknown orientation %r (expected face_up or "
+            "flip_chip)" % (comp.get("id"), orientation))
     return x, y, rotation, mirrored
 
 
@@ -671,6 +731,7 @@ def run_check(assembly: Dict[str, Any], manifest: Dict[str, Any],
                 else:
                     warnings.append(message)
             continue
+        _check_die_anchor(comp)
         pads_global = transform_pads(comp, die_pads[ref])
         device_findings, matched = match_device(
             ref, pads_global, pillars, tolerance_um=tolerance_um,
@@ -789,6 +850,12 @@ def _gather_die_pads(assembly: Dict[str, Any], chiplet_path: Path,
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+    # The whole pipeline -- parse, check, AND report emission -- runs inside
+    # this try so that exit 1 is structurally reachable ONLY via the deliberate
+    # findings return at the end. Any other failure, whether in the check or in
+    # emission, funnels to exit 2; an unguarded exception must never leak to
+    # Python's default handler (which exits 1, indistinguishable from a
+    # MISALIGNED finding). This is the invariant CI relies on.
     try:
         assembly = load_chiplet(args.chiplet)
         manifest = load_pillar_manifest(args.pillars)
@@ -796,37 +863,39 @@ def main(argv=None) -> int:
             assembly, Path(args.chiplet).resolve(), args.pins, args.gds_pads)
         report = run_check(assembly, manifest, die_pads,
                            tolerance_um=args.tolerance_um, strict=args.strict)
+
+        report["chiplet"] = str(args.chiplet)
+        report["pillar_manifest"] = str(args.pillars)
+
+        for warning in report["warnings"]:
+            print("WARNING: %s" % warning, file=sys.stderr)
+        for finding in report["findings"]:
+            print("%s [%s]: %s"
+                  % (finding["type"], finding["device_ref"], finding["message"]))
+        summary = report["summary"]
+        print("pads_vs_pillars: %d finding(s), %d warning(s) across %d checked "
+              "device(s): %s"
+              % (summary["findings"], summary["warnings"],
+                 summary["devices_checked"],
+                 "PASSED" if summary["passed"] else "FAILED"))
+
+        if args.json:
+            Path(args.json).write_text(
+                json.dumps(report, indent=2) + "\n", encoding="utf-8")
+            print("Report: %s" % args.json)
+
+        return 0 if summary["passed"] else 1
     except (cfio.ChipletFormatError, chiplet2dbx.ExportError, CheckError,
             OSError) as exc:
         print("pads_vs_pillars: error: %s" % exc, file=sys.stderr)
         return 2
-
-    report["chiplet"] = str(args.chiplet)
-    report["pillar_manifest"] = str(args.pillars)
-
-    for warning in report["warnings"]:
-        print("WARNING: %s" % warning, file=sys.stderr)
-    for finding in report["findings"]:
-        print("%s [%s]: %s"
-              % (finding["type"], finding["device_ref"], finding["message"]))
-    summary = report["summary"]
-    print("pads_vs_pillars: %d finding(s), %d warning(s) across %d checked "
-          "device(s): %s"
-          % (summary["findings"], summary["warnings"],
-             summary["devices_checked"],
-             "PASSED" if summary["passed"] else "FAILED"))
-
-    if args.json:
-        try:
-            Path(args.json).write_text(
-                json.dumps(report, indent=2) + "\n", encoding="utf-8")
-        except OSError as exc:
-            print("pads_vs_pillars: error: cannot write report %s: %s"
-                  % (args.json, exc), file=sys.stderr)
-            return 2
-        print("Report: %s" % args.json)
-
-    return 0 if summary["passed"] else 1
+    except Exception as exc:  # noqa: BLE001
+        # A genuine tool bug (the only thing that should reach here). Keep the
+        # traceback so it stays debuggable, but still exit 2 -- never 1.
+        traceback.print_exc(file=sys.stderr)
+        print("pads_vs_pillars: error: unexpected failure: %s" % exc,
+              file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
