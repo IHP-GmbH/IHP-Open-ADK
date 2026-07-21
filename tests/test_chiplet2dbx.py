@@ -71,14 +71,14 @@ def base_assembly():
                             "thickness": 10.0},
              "position": {"x": 500.0, "y": 400.0, "z": 0.0}},
             {"id": "D1", "type": "die", "technology": "techb",
-             "layout": "d1.gds", "top_cell": "DIE_A",
+             "layout": "d1.gds", "top_cell": "DIE_A", "anchor": "gds_origin",
              "connection": "bump25", "orientation": "flip_chip",
              "dimensions": {"width": 300.0, "height": 200.0,
                             "thickness": 150.0},
              "position": {"x": 250.0, "y": 300.0, "z": 35.0},
              "rotation": {"z": 0.0}},
             {"id": "D2", "type": "die", "technology": "techb",
-             "layout": "d2.gds", "top_cell": "DIE_B",
+             "layout": "d2.gds", "top_cell": "DIE_B", "anchor": "gds_origin",
              "connection": "bump40", "orientation": "flip_chip",
              "dimensions": {"width": 200.0, "height": 200.0,
                             "thickness": 100.0},
@@ -210,7 +210,44 @@ def test_non_90_rotation_fails():
 def test_face_down_fails():
     assembly = base_assembly()
     assembly["components"][1]["orientation"] = "face_down"
-    with pytest.raises(ExportError, match="face_down"):
+    with pytest.raises(ExportError, match="flip_chip"):
+        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
+
+
+def test_die_anchor_bbox_center_fails():
+    """A die declaring bbox_center can't be exported with the gds_origin
+    die-local bump transform; hard error, not a silent misplacement."""
+    assembly = base_assembly()
+    assembly["components"][1]["anchor"] = "bbox_center"
+    with pytest.raises(ExportError, match="bbox_center"):
+        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
+
+
+def test_die_anchor_gds_origin_ok():
+    """Explicit gds_origin exports normally (base_assembly dies declare it)."""
+    assembly = base_assembly()
+    assembly["components"][1]["anchor"] = "gds_origin"
+    chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
+
+
+def test_die_anchor_absent_fails():
+    """An absent anchor defaults to bbox_center per the contract, which this
+    exporter cannot handle; hard error, not a silent gds_origin assumption."""
+    assembly = base_assembly()
+    del assembly["components"][1]["anchor"]
+    with pytest.raises(ExportError, match="anchor"):
+        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
+
+
+@pytest.mark.parametrize("rot", ["90deg", None, [0, 0, 90]])
+def test_malformed_rotation_is_export_error(rot):
+    """A non-numeric rotation.z, or a non-dict rotation container (list),
+    surfaces as a clean ExportError (exit 1), not a raw traceback; the exporter
+    keeps its 0/1 contract (no exit-2 tier)."""
+    assembly = base_assembly()
+    assembly["components"][1]["rotation"] = (
+        rot if isinstance(rot, list) else {"z": rot})
+    with pytest.raises(ExportError, match="rotation"):
         chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
 
 
