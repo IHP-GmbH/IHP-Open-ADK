@@ -108,6 +108,19 @@ def bump_assembly():
     return assembly
 
 
+def attach_surface_assembly():
+    """base_assembly with the interposer split: a thin die-attachment surface
+    (13.83 um) decoupled from a thick physical body (300 um). Dies mount on the
+    attachment surface, so their z is attachment_surface_z + stack height."""
+    assembly = base_assembly()
+    interposer = assembly["components"][0]
+    interposer["attachment_surface_z"] = 13.83
+    interposer["dimensions"]["thickness"] = 300.0  # physical body, not the mount ref
+    assembly["components"][1]["position"]["z"] = 13.83 + 25.0  # bump25 total
+    assembly["components"][2]["position"]["z"] = 13.83 + 40.0  # bump40 total
+    return assembly
+
+
 # ---------------------------------------------------------------- goldens
 
 def test_render_3dbv_golden():
@@ -297,6 +310,46 @@ def test_interposer_count_enforced():
     assembly = base_assembly()
     assembly["components"].append(copy.deepcopy(assembly["components"][0]))
     with pytest.raises(ExportError, match="exactly one interposer"):
+        chiplet2dbx.render_3dbv(assembly)
+
+
+# ------------------------------------------------- attachment surface split
+
+def test_attachment_surface_z_drives_mount_and_substrate():
+    """A declared attachment_surface_z is the mount reference AND the thin
+    substrate def thickness; the physical dimensions.thickness is not modelled."""
+    assembly = attach_surface_assembly()
+    # Mount surface = attachment_surface_z, so the die z-gap check passes and
+    # the export runs end to end.
+    dbx = chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
+    assert "reference: DIE_A" in dbx
+    dbv = chiplet2dbx.render_3dbv(assembly)
+    # The substrate is a thin mount plane = 13.83, NOT the 300 um body.
+    assert "thickness: 13.83\n" in dbv
+    assert "thickness: 300" not in dbv
+
+
+def test_attachment_surface_z_gap_measured_against_surface():
+    """The z-gap assert measures against attachment_surface_z, not thickness."""
+    assembly = attach_surface_assembly()
+    assembly["components"][1]["position"]["z"] = 13.83 + 25.0 + 1.0  # off by 1 um
+    with pytest.raises(ExportError, match="z gap"):
+        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
+
+
+def test_attachment_surface_z_absent_falls_back_to_thickness():
+    """Without attachment_surface_z, dimensions.thickness is the mount ref
+    (legacy files); base_assembly's substrate = 10 relies on this fallback."""
+    assembly = base_assembly()
+    assert "attachment_surface_z" not in assembly["components"][0]
+    dbv = chiplet2dbx.render_3dbv(assembly)
+    assert "thickness: 10\n" in dbv  # substrate = dimensions.thickness
+
+
+def test_non_positive_attachment_surface_z_fails():
+    assembly = attach_surface_assembly()
+    assembly["components"][0]["attachment_surface_z"] = 0.0
+    with pytest.raises(ExportError, match="attachment_surface_z"):
         chiplet2dbx.render_3dbv(assembly)
 
 

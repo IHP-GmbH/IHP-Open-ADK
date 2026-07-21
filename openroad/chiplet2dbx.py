@@ -124,6 +124,28 @@ def _require_dimension(comp: Dict[str, Any], key: str) -> float:
     return value
 
 
+def _mount_reference(interposer: Dict[str, Any]) -> float:
+    """The interposer surface dies mount on, in the assembly z-frame.
+
+    Prefers the component-level ``attachment_surface_z`` (the BEOL-top
+    die-attachment plane, decoupled from the physical interposer body). Falls
+    back to ``dimensions.thickness`` for legacy .chiplet files, where thickness
+    encoded that surface. The 3Dblox substrate is a thin mount plane, so this
+    reference is both the substrate def thickness and the die mount z; the
+    physical interposer body is intentionally not modelled here.
+    """
+    asz = interposer.get("attachment_surface_z")
+    if asz is None:
+        return _require_dimension(interposer, "thickness")
+    value = float(asz)
+    if value <= 0:
+        raise ExportError(
+            "interposer %r has non-positive attachment_surface_z (%s)"
+            % (interposer.get("id"), value)
+        )
+    return value
+
+
 def _position(comp: Dict[str, Any]) -> Tuple[float, float, float]:
     pos = comp.get("position") or {}
     try:
@@ -413,16 +435,20 @@ def _build_model(assembly: Dict[str, Any],
 
     ipos_w = _require_dimension(interposer, "width")
     ipos_h = _require_dimension(interposer, "height")
-    ipos_t = _require_dimension(interposer, "thickness")
+    # The 3Dblox substrate is a THIN mount plane, not the physical interposer
+    # body: its def thickness and the die mount surface are both the
+    # interposer's die-attachment surface z (attachment_surface_z when the
+    # .chiplet declares it, else the legacy dimensions.thickness).
+    mount_ref = _mount_reference(interposer)
     ipos_x, ipos_y, ipos_z = _position(interposer)
-    mount_z = ipos_z + ipos_t
+    mount_z = ipos_z + mount_ref
 
     defs: Dict[str, Dict[str, Any]] = {
         str(interposer.get("top_cell") or interposer["id"]): {
             "type": "substrate",
             "width": ipos_w,
             "height": ipos_h,
-            "thickness": ipos_t,
+            "thickness": mount_ref,
             "technology": _technology_of(interposer),
             "key": ("__interposer__",),
         }
