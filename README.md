@@ -12,9 +12,6 @@ chiplet dies remain ordinary PDKs.
 
 `v0.2.0`. The KLayout assembly DRC, its runner, the KiCad DRU generator, and the
 IHP interposer adapter are implemented and exercised by the regression suite.
-The migration out of the interposer-coupled implementation is still settling, so
-expect the layer registry and rule set to keep moving. See `docs/architecture.md`
-for the role model and `CHANGELOG.md` for what has landed.
 
 ## What it checks
 
@@ -29,12 +26,7 @@ Two independent rule axes, each driven by a PDK adapter:
 
 Both axes are interposer-agnostic: the deck consumes abstract layer names that
 an adapter maps to PDK-specific fabrication layers. Chiplet boundaries are not
-read from a fab layer; they come from a boundary manifest sidecar (see below).
-
-On top of the DRC deck, a manifest-level check (`checks/pads_vs_pillars.py`)
-verifies that each die's pad positions line up with the interposer's as-drawn
-Cu-pillar/bump positions, read from the `<gds-stem>.pillars.json` sidecar
-(see `docs/pillar_manifest.md`).
+read from a fab layer; they come from a boundary manifest sidecar.
 
 ## Current scope
 
@@ -67,8 +59,6 @@ pdk_adapters/            interposer/ and interconnect/ adapters per PDK
 vendor/                  Vendored chiplet_format_io reference reader
 thermal/ power/ timing/  Reserved for future ADK domains (README stubs only)
 tests/                   Regression fixtures and golden references
-docs/                    Architecture, layer registry, adapter contract,
-                         boundary manifest, pillar manifest, integration
 ```
 
 ## Running the assembly DRC
@@ -119,8 +109,7 @@ Transforms each die's pad centers through its `.chiplet` placement
 (position, rotation, flip-chip mirror) and matches them against the as-drawn
 pillar centers in the pillar manifest, by pin name where available and by
 nearest-unique fallback otherwise. Exit codes: 0 clean, 1 findings, 2
-usage/validation errors. See `checks/README.md` and
-`docs/pillar_manifest.md`.
+usage/validation errors. See `checks/README.md`.
 
 ## Exporting to OpenROAD 3Dblox
 
