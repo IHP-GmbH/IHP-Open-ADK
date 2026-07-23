@@ -1,4 +1,4 @@
-# ADK: Assembly Design Kit
+# IHP Open Assembly Design Kit (ADK)
 
 Assembly-level Design Kit for heterogeneous chiplet integration. The ADK lives
 one abstraction layer above all PDKs: it owns the rules and tooling that govern
