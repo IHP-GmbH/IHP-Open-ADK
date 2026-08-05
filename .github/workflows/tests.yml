@@ -2,19 +2,28 @@ name: tests
 
 on:
   push:
+    branches: [dev, main]
   pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # One KLayout for the whole ecosystem. The source of truth is
+  # `ARG KLAYOUT_PIP` in the adk-tools Dockerfile, which is also the version
+  # Chiplet Studio's in-tree extern/klayout is pinned at. Testing a deck
+  # against a different KLayout than the one the image ships proves the deck
+  # works somewhere other than where it runs.
+  KLAYOUT_VERSION: "0.30.5"
+  # Pinned by content, not just by name, so a .deb that changes under a stable
+  # URL cannot silently change what these decks were checked against.
+  KLAYOUT_DEB_SHA256: "9f88fe45d1992fc9bd0ce986bbbe150ad198c6a59a86fc13343db822a5790e49"
 
 jobs:
   tests:
-    # Pinned to 22.04 so the KLayout .deb below matches the runner libc/Qt.
-    runs-on: ubuntu-22.04
-    env:
-      # One KLayout for the whole ecosystem. The source of truth is
-      # `ARG KLAYOUT_PIP` in the adk-tools Dockerfile, which is also the version
-      # Chiplet Studio's in-tree extern/klayout is pinned at. Testing a deck
-      # against a different KLayout than the one the image ships proves the deck
-      # works somewhere other than where it runs.
-      KLAYOUT_VERSION: "0.30.5"
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -40,16 +49,41 @@ jobs:
         # job. klayout.org does keep older builds (0.30.5, 0.30.9 and 0.30.10
         # were all reachable when this was last checked), so a 404 here means
         # something changed at the source, not that the pin aged out.
+        #
+        # A download that succeeds is held to the pin: wrong checksum or wrong
+        # reported version fails the job. Those are not availability problems,
+        # they mean the decks would be checked against something other than
+        # what the image ships, which is the exact skew this env block exists
+        # to prevent.
         run: |
           set -x
           KLAYOUT_DEB="klayout_${KLAYOUT_VERSION}-1_amd64.deb"
-          if curl -fsSLO "https://www.klayout.org/downloads/Ubuntu-22/${KLAYOUT_DEB}"; then
+          if curl -fsSLO "https://www.klayout.org/downloads/Ubuntu-24/${KLAYOUT_DEB}"; then
+            echo "${KLAYOUT_DEB_SHA256}  ${KLAYOUT_DEB}" | sha256sum -c -
             sudo apt-get update
             sudo apt-get install -y "./${KLAYOUT_DEB}"
             klayout -b -v
+            klayout -b -v 2>&1 | grep -qF "${KLAYOUT_VERSION}"
           else
-            echo "::warning::Could not download ${KLAYOUT_DEB}; the DRC-deck tests will skip. Check https://www.klayout.org/downloads/Ubuntu-22/ and the KLAYOUT_VERSION env above."
+            echo "::warning::Could not download ${KLAYOUT_DEB}; the DRC-deck tests will skip. Check https://www.klayout.org/downloads/Ubuntu-24/ and the KLAYOUT_VERSION env above."
           fi
 
       - name: Run tests
         run: pytest tests -q
+
+  # The one required status check. A single collector context per repository
+  # means a ruleset names `ci-gate` everywhere and never has to be edited when
+  # the job list inside a workflow changes.
+  ci-gate:
+    needs: [tests]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every gating job to have succeeded
+        # `needs` alone does not gate: with `if: always()` this job runs even
+        # when a dependency failed, so the result has to be compared
+        # explicitly. Without the comparison the gate reports green after its
+        # dependencies went red.
+        run: |
+          echo "tests: ${{ needs.tests.result }}"
+          test "${{ needs.tests.result }}" = "success"
