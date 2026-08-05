@@ -8,6 +8,13 @@ jobs:
   tests:
     # Pinned to 22.04 so the KLayout .deb below matches the runner libc/Qt.
     runs-on: ubuntu-22.04
+    env:
+      # One KLayout for the whole ecosystem. The source of truth is
+      # `ARG KLAYOUT_PIP` in the adk-tools Dockerfile, which is also the version
+      # Chiplet Studio's in-tree extern/klayout is pinned at. Testing a deck
+      # against a different KLayout than the one the image ships proves the deck
+      # works somewhere other than where it runs.
+      KLAYOUT_VERSION: "0.30.5"
     steps:
       - uses: actions/checkout@v4
 
@@ -22,25 +29,26 @@ jobs:
       - name: Install Python dependencies
         # pyyaml: the vendored chiplet_format_io reader used by the
         # chiplet2dbx exporter parses .chiplet (YAML) with it.
-        run: pip install pytest klayout jinja2 jsonschema pyyaml
+        run: pip install pytest "klayout==${KLAYOUT_VERSION}" jinja2 jsonschema pyyaml
 
       - name: Install KLayout CLI
         # The DRC-deck tests shell out to `klayout -b`; the pip `klayout` wheel
         # ships only the Python module, so without the CLI those 18 tests skip
         # and the deck semantics go unchecked here. Install the CLI so they run.
         # The adk-tools umbrella image is the authoritative deck gate; this is
-        # defense in depth, so it is best-effort: klayout.org keeps only the
-        # current build, and if the pinned URL is retired the deck tests just
-        # skip (as before) rather than failing the job. Bump the version then.
+        # defense in depth, so a download failure warns rather than failing the
+        # job. klayout.org does keep older builds (0.30.5, 0.30.9 and 0.30.10
+        # were all reachable when this was last checked), so a 404 here means
+        # something changed at the source, not that the pin aged out.
         run: |
           set -x
-          KLAYOUT_DEB=klayout_0.30.9-1_amd64.deb
+          KLAYOUT_DEB="klayout_${KLAYOUT_VERSION}-1_amd64.deb"
           if curl -fsSLO "https://www.klayout.org/downloads/Ubuntu-22/${KLAYOUT_DEB}"; then
             sudo apt-get update
             sudo apt-get install -y "./${KLAYOUT_DEB}"
             klayout -b -v
           else
-            echo "::warning::Could not download ${KLAYOUT_DEB}; the DRC-deck tests will skip. Update the pin in .github/workflows/tests.yml."
+            echo "::warning::Could not download ${KLAYOUT_DEB}; the DRC-deck tests will skip. Check https://www.klayout.org/downloads/Ubuntu-22/ and the KLAYOUT_VERSION env above."
           fi
 
       - name: Run tests
