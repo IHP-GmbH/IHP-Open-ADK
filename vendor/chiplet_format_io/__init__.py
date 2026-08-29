@@ -21,13 +21,16 @@ Typical use::
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+import warnings
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import yaml
 
 __all__ = [
     "SUPPORTED_FORMAT_VERSION",
     "ChipletFormatError",
+    "FormatVersionWarning",
+    "check_format_version",
     "loads",
     "load",
     "dumps",
@@ -35,7 +38,10 @@ __all__ = [
     "validate",
 ]
 
-#: The only ``format_version`` this reference implementation understands.
+#: The highest ``format_version`` this reference implementation was written for.
+#: The on-disk baseline stays additive-stable at "1.0"; readers are tolerant of
+#: a same-major higher minor (see :func:`check_format_version`), so this is a
+#: single exported string constant, never re-derived from a bump.
 SUPPORTED_FORMAT_VERSION = "1.0"
 
 
@@ -43,18 +49,114 @@ class ChipletFormatError(ValueError):
     """Raised when a .chiplet document is malformed or unsupported."""
 
 
-def _validate(data: Dict[str, Any], *, allow_intermediate: bool) -> Dict[str, Any]:
+class FormatVersionWarning(UserWarning):
+    """A .chiplet declares a newer same-major minor than the reader supports.
+
+    The document is still read (as the supported version, ignoring unknown
+    additions), but a same-major higher minor may carry fields this reader does
+    not understand, so the event is surfaced.
+    """
+
+
+def _parse_version(fv: Any) -> Optional[Tuple[int, int]]:
+    """Parse a ``format_version`` value into ``(major, minor)`` or ``None``.
+
+    The spec says ``format_version`` MUST be a quoted ``"MAJOR.MINOR"`` string.
+    An int/float is coerced through ``str()`` for back-compat (an unquoted
+    ``1.0`` in YAML), which is exactly where Python and yaml-cpp can diverge
+    (unquoted ``1.10`` becomes ``1.1`` under PyYAML, ``1.10`` under yaml-cpp);
+    the divergence is pinned by a conformance fixture, not hidden here.
+    """
+    if isinstance(fv, bool):
+        return None
+    if isinstance(fv, (int, float)):
+        fv = str(fv)
+    if not isinstance(fv, str):
+        return None
+    parts = fv.strip().split(".")
+    if len(parts) != 2:
+        return None
+    try:
+        major, minor = int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+    if major < 0 or minor < 0:
+        return None
+    return (major, minor)
+
+
+_SUPPORTED_MAJOR, _SUPPORTED_MINOR = _parse_version(SUPPORTED_FORMAT_VERSION)  # type: ignore[misc]
+
+#: Module-private warn-once state, keyed by the raw "MAJOR.MINOR" that fired.
+#: Resettable so a test suite does not leak dedup state across cases.
+_WARNED_VERSIONS: set = set()
+
+
+def _reset_version_warnings() -> None:
+    """Clear the warn-once dedup set (test hook)."""
+    _WARNED_VERSIONS.clear()
+
+
+def check_format_version(fv: Any, *,
+                         on_warn: Optional[Callable[[str], None]] = None) -> str:
+    """Apply the tolerant ``format_version`` policy; return the normalized version.
+
+    Policy: missing or malformed -> :class:`ChipletFormatError`; a major other
+    than the supported major (higher OR lower) -> :class:`ChipletFormatError`;
+    same major, minor <= supported -> accept silently; same major, higher minor
+    -> accept, warn once per distinct version via ``warnings.warn`` AND deliver
+    every event (undeduped) to ``on_warn`` when supplied.
+    """
+    if fv is None:
+        raise ChipletFormatError("missing required key: format_version")
+    parsed = _parse_version(fv)
+    if parsed is None:
+        raise ChipletFormatError(
+            f"malformed format_version {fv!r}; expected a quoted "
+            f'"MAJOR.MINOR" string')
+    major, minor = parsed
+    if major != _SUPPORTED_MAJOR:
+        raise ChipletFormatError(
+            f"unsupported format_version {fv!r}; this reader supports major "
+            f"{_SUPPORTED_MAJOR} (e.g. {SUPPORTED_FORMAT_VERSION!r})")
+    normalized = f"{major}.{minor}"
+    if minor > _SUPPORTED_MINOR:
+        msg = (
+            f"format_version {fv!r} is newer than this reader's "
+            f"{SUPPORTED_FORMAT_VERSION!r} (same major {major}); reading it as "
+            f"{SUPPORTED_FORMAT_VERSION!r} and ignoring unknown additions")
+        if on_warn is not None:
+            on_warn(msg)
+        if normalized not in _WARNED_VERSIONS:
+            _WARNED_VERSIONS.add(normalized)
+            warnings.warn(msg, FormatVersionWarning, stacklevel=2)
+    return normalized
+
+
+def _apply_write_version(out: Dict[str, Any]) -> None:
+    """Set ``out['format_version']`` per the passthrough writer rule (H-B crux).
+
+    The stamped version must describe the bytes written. This is a *lossless*
+    passthrough writer (it re-emits the whole dict, unknown keys included), so a
+    same-major higher-minor input is PRESERVED; a missing/lower/equal version is
+    stamped down to :data:`SUPPORTED_FORMAT_VERSION`. Warning re-emission is done
+    by the validate pass in :func:`dumps`, not here. (Lossy writers -- the C++
+    struct writer, the from-scratch KiCad exporter -- stamp SUPPORTED instead.)
+    """
+    parsed = _parse_version(out.get("format_version"))
+    if parsed is not None and parsed[0] == _SUPPORTED_MAJOR \
+            and parsed[1] > _SUPPORTED_MINOR:
+        out["format_version"] = f"{parsed[0]}.{parsed[1]}"
+    else:
+        out["format_version"] = SUPPORTED_FORMAT_VERSION
+
+
+def _validate(data: Dict[str, Any], *, allow_intermediate: bool,
+              on_warn: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise ChipletFormatError("top-level .chiplet document must be a mapping")
 
-    fv = data.get("format_version")
-    if fv is None:
-        raise ChipletFormatError("missing required key: format_version")
-    if str(fv) != SUPPORTED_FORMAT_VERSION:
-        raise ChipletFormatError(
-            f"unsupported format_version {fv!r}; expected "
-            f"{SUPPORTED_FORMAT_VERSION!r}"
-        )
+    check_format_version(data.get("format_version"), on_warn=on_warn)
 
     meta = data.get("_metadata") or {}
     if isinstance(meta, dict) and meta.get("finalize_required") and not allow_intermediate:
@@ -91,45 +193,58 @@ def _validate(data: Dict[str, Any], *, allow_intermediate: bool) -> Dict[str, An
     return data
 
 
-def validate(data: Dict[str, Any], *, allow_intermediate: bool = False) -> Dict[str, Any]:
+def validate(data: Dict[str, Any], *, allow_intermediate: bool = False,
+             on_warn: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
     """Validate a parsed .chiplet mapping in place; return it. Raises on error."""
-    return _validate(data, allow_intermediate=allow_intermediate)
+    return _validate(data, allow_intermediate=allow_intermediate, on_warn=on_warn)
 
 
-def loads(text: str, *, allow_intermediate: bool = False, validate: bool = True) -> Dict[str, Any]:
+def loads(text: str, *, allow_intermediate: bool = False, validate: bool = True,
+          on_warn: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
     """Parse a .chiplet document from a YAML string into a dict."""
     data = yaml.safe_load(text)
     if data is None:
         raise ChipletFormatError("empty .chiplet document")
     if validate:
-        _validate(data, allow_intermediate=allow_intermediate)
+        _validate(data, allow_intermediate=allow_intermediate, on_warn=on_warn)
     return data
 
 
-def load(path, *, allow_intermediate: bool = False, validate: bool = True) -> Dict[str, Any]:
+def load(path, *, allow_intermediate: bool = False, validate: bool = True,
+         on_warn: Optional[Callable[[str], None]] = None) -> Dict[str, Any]:
     """Read and parse a .chiplet file into a dict."""
     with open(path, "r", encoding="utf-8") as fh:
-        return loads(fh.read(), allow_intermediate=allow_intermediate, validate=validate)
+        return loads(fh.read(), allow_intermediate=allow_intermediate,
+                     validate=validate, on_warn=on_warn)
 
 
-def dumps(data: Dict[str, Any], *, validate: bool = True) -> str:
+def dumps(data: Dict[str, Any], *, validate: bool = True,
+          on_warn: Optional[Callable[[str], None]] = None) -> str:
     """Serialize a .chiplet mapping to a canonical YAML string.
 
     Key order is preserved (insertion order). This is semantic, not byte-exact
-    to the GPL host writers.
+    to the GPL host writers. This is a lossless passthrough writer: the stamped
+    ``format_version`` describes the bytes written, so a same-major higher-minor
+    input is preserved (and, when validating, re-warns), never silently stamped
+    down. See :func:`_apply_write_version`.
     """
+    out = dict(data)
     if validate:
-        # writing an intermediate (finalize_required) document is legitimate
-        _validate(data, allow_intermediate=True)
+        # Writing an intermediate (finalize_required) document is legitimate.
+        # This re-runs check_format_version, so a preserved higher minor re-warns
+        # on write (deduped default channel; every event to on_warn).
+        _validate(out, allow_intermediate=True, on_warn=on_warn)
+    _apply_write_version(out)
     return yaml.safe_dump(
-        data,
+        out,
         sort_keys=False,
         default_flow_style=False,
         allow_unicode=True,
     )
 
 
-def dump(data: Dict[str, Any], path, *, validate: bool = True) -> None:
+def dump(data: Dict[str, Any], path, *, validate: bool = True,
+         on_warn: Optional[Callable[[str], None]] = None) -> None:
     """Serialize a .chiplet mapping to a file."""
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write(dumps(data, validate=validate))
+        fh.write(dumps(data, validate=validate, on_warn=on_warn))
