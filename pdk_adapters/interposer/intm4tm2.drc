@@ -2,11 +2,15 @@
 #
 # IHP 130-nm IntM4TM2 aluminum BEOL interposer adapter.
 #
-# Declares ADK abstract inputs in terms of IHP-specific layers. IntM4TM2's
-# chiplet-attachment mechanism is the Cu pillar, formed where the
-# passivation opening (9/35) and the final Cu pad (41/35) overlap.
+# Declares ADK abstract inputs in terms of IHP-specific layers. IntM4TM2
+# supports two chiplet-attachment mechanisms: the Cu pillar, formed where the
+# passivation opening (9/35) and the final Cu pad (41/35) overlap, and the
+# solder bump, formed where the passivation opening (9/36) and the final Cu
+# pad (41/36) overlap. Both feed the abstract attachment input.
 
 passiv_pillar = polygons(9, 35)
 dfpad_pillar  = polygons(41, 35)
+passiv_sbump  = polygons(9, 36)
+dfpad_sbump   = polygons(41, 36)
 
-chiplet_attachment_input = passiv_pillar.and(dfpad_pillar)
+chiplet_attachment_input = passiv_pillar.and(dfpad_pillar).join(passiv_sbump.and(dfpad_sbump))
