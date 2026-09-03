@@ -1,0 +1,20 @@
+{
+  "schema": "adk-registry",
+  "version": "1.0",
+  "_comment": "Built-in ADK registry. Anchored beside adk_registry.py at the ADK root; relative values resolve against this directory. Adapter ids index the vetted pdk_adapters/ trees. Root ids resolve to directories (consumers join fixed relative paths); ADK is the ADK root itself, the others are the canonical sibling checkouts. PDK_ROOT and GDS_TO_KICAD_DATA_DIR are deliberately NOT ids: they stay validated paths (see the data-vs-code enumeration test).",
+  "adapters": {
+    "intm4tm2": "pdk_adapters/interposer/intm4tm2.drc",
+    "ihp_cupillar": "pdk_adapters/interconnect/ihp_cupillar.drc",
+    "ihp_sbump": "pdk_adapters/interconnect/ihp_sbump.drc",
+    "vendorx_microbump": "pdk_adapters/interconnect/vendorx_microbump.drc"
+  },
+  "roots": {
+    "ADK": ".",
+    "INTERPOSER_PDK": "../OpenIntM4TM2",
+    "INTERCONNECT_PDK": "../IHP-Interconnect-IntM4TM2",
+    "GDS_TO_KICAD": "../gds_to_kicad"
+  },
+  "interpreters": {
+    "worker": ".venv/bin/python3"
+  }
+}
