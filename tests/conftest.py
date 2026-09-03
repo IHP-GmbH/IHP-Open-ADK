@@ -16,7 +16,13 @@ import pytest
 ADK_ROOT = Path(__file__).resolve().parents[1]
 RUNNER_DIR = ADK_ROOT / "klayout" / "drc"
 TEST_DIR = Path(__file__).resolve().parent
-TEST_ADAPTER = TEST_DIR / "fixtures" / "test_interposer_adapter.drc"
+FIXTURE_DIR = TEST_DIR / "fixtures"
+TEST_ADAPTER = FIXTURE_DIR / "test_interposer_adapter.drc"
+
+# Registry ids the fixture registry layer (fixtures/registry.json) declares.
+# Adapters are selected by id only, so the suite names these, never a path.
+TEST_ADAPTER_ID = "test_interposer"
+TEST_INTERCONNECT_ADAPTER_ID = "test_interconnect"
 
 # Layer numbers used by the synthetic fixtures. exchange0 only models a
 # pre-migration ("legacy") GDS; the manifest-native path ignores it. The
@@ -26,6 +32,32 @@ ATTACHMENT_LAYER = (999, 0)
 
 # Make the runner importable from tests (PDK-agnostic helpers only).
 sys.path.insert(0, str(RUNNER_DIR))
+if str(ADK_ROOT) not in sys.path:
+    sys.path.insert(0, str(ADK_ROOT))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def registry_layer():
+    """Point the registry's env layer at tests/fixtures for the whole session.
+
+    Adapters resolve by registry id only, so the synthetic test adapters need a
+    registry entry to be reachable at all. ``ADK_REGISTRY_DIR`` names a
+    DIRECTORY holding ``registry.json`` (adk_registry._env_path), and the layer
+    merges OVER the built-in one, so every shipped adapter id keeps resolving.
+    Set in ``os.environ`` (via monkeypatch) so the subprocess-based tests, which
+    inherit the environment, see the same layer.
+    """
+    import adk_registry
+
+    mp = pytest.MonkeyPatch()
+    mp.setenv("ADK_REGISTRY_DIR", str(FIXTURE_DIR))
+    # Verify rather than assume: a typo in the env var name or the layer
+    # basename would silently leave every test id unresolvable.
+    res = adk_registry.resolve_adapter(TEST_ADAPTER_ID)
+    assert res.value == TEST_ADAPTER, (
+        f"fixture registry did not answer for {TEST_ADAPTER_ID!r}: {res}")
+    yield FIXTURE_DIR
+    mp.undo()
 
 
 def _new_layout():
@@ -174,7 +206,11 @@ def fixture_layouts(tmp_path_factory) -> dict:
 
 
 @pytest.fixture(scope="session")
-def test_adapter() -> Path:
-    """Path to the synthetic interposer adapter."""
+def test_adapter(registry_layer) -> str:
+    """Registry id of the synthetic interposer adapter.
+
+    An id, not a path: the runner accepts only registered ids, so a test that
+    held a path here could not reach the runner at all.
+    """
     assert TEST_ADAPTER.is_file(), f"Missing test adapter: {TEST_ADAPTER}"
-    return TEST_ADAPTER
+    return TEST_ADAPTER_ID

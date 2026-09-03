@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Synthetic interconnect adapter for ADK regression tests.
+#
+# Sets the three required IXN_* method numbers over the abstract attachment
+# region the interposer adapter exposes, so the test suite exercises the
+# interconnect axis with zero dependency on any real interconnect PDK.
+# interconnect_region is intentionally omitted -> the deck defaults it to
+# chiplet_attachment_input.
+
+interconnect_rules['IXN_spacing'] = 15.0
+interconnect_rules['IXN_pitch']   = 50.0
+interconnect_rules['IXN_pad_size'] = 35.0

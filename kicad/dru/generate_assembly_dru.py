@@ -25,10 +25,17 @@ from typing import Dict, Optional, Pattern
 import jinja2
 
 ADK_ROOT = Path(__file__).resolve().parents[2]
+
+# The ADK root holds adk_registry, the single anchored id->location resolver.
+# Bootstrap it onto sys.path so this generator works when invoked by absolute
+# path (the normal case) as well as when imported by a downstream generator.
+if str(ADK_ROOT) not in sys.path:
+    sys.path.insert(0, str(ADK_ROOT))
+
+import adk_registry  # noqa: E402
+
 RULE_PARAMS_JSON = ADK_ROOT / "config" / "rule_params.json"
 INTERCONNECT_JSON = ADK_ROOT / "config" / "interconnect.json"
-ADAPTER_DIR = ADK_ROOT / "pdk_adapters" / "interposer"
-INTERCONNECT_ADAPTER_DIR = ADK_ROOT / "pdk_adapters" / "interconnect"
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 TEMPLATE_NAME = "assembly_rules.dru.jinja"
 
@@ -130,29 +137,23 @@ def _apply_overrides(base: Dict[str, float], overrides: Dict[str, float],
     base.update(overrides)
 
 
-def _resolve_adapter_path(name_or_path: str, search_dir: Path, kind: str) -> Path:
-    """Resolve a shortname (e.g. 'intm4tm2') or a .drc path against ``search_dir``."""
-    candidate = Path(name_or_path)
-    if candidate.suffix == ".drc" and candidate.is_file():
-        return candidate.resolve()
-    shortname = name_or_path[:-4] if name_or_path.endswith(".drc") else name_or_path
-    candidate = search_dir / f"{shortname}.drc"
-    if candidate.is_file():
-        return candidate.resolve()
-    raise FileNotFoundError(
-        f"{kind} adapter not found: '{name_or_path}'. "
-        f"Looked for the literal path and for '{search_dir / (shortname + '.drc')}'."
-    )
+# Adapter selection is code selection (the same file the KLayout deck EVALs),
+# so the argument is a registry id and nothing else: no directory join, no
+# CWD-relative path, no ".drc" branch. Neither resolver builds a Path from its
+# argument, so the returned path is by construction one of the vetted registry
+# values. Do not reintroduce a search directory here.
 
 
-def resolve_adapter_path(name_or_path: str) -> Path:
-    """Resolve an interposer adapter shortname (e.g. 'intm4tm2') or a .drc path."""
-    return _resolve_adapter_path(name_or_path, ADAPTER_DIR, "Interposer")
+def resolve_adapter_path(adapter_id: str) -> Path:
+    """Resolve an interposer adapter registry id to its vetted .drc path."""
+    adk_registry.validate_id(adapter_id, "interposer adapter")
+    return adk_registry.resolve_adapter(adapter_id).value
 
 
-def resolve_interconnect_adapter_path(name_or_path: str) -> Path:
-    """Resolve an interconnect adapter shortname or .drc path."""
-    return _resolve_adapter_path(name_or_path, INTERCONNECT_ADAPTER_DIR, "Interconnect")
+def resolve_interconnect_adapter_path(adapter_id: str) -> Path:
+    """Resolve an interconnect adapter registry id to its vetted .drc path."""
+    adk_registry.validate_id(adapter_id, "interconnect adapter")
+    return adk_registry.resolve_adapter(adapter_id).value
 
 
 def render_assembly_rules(rules: Dict[str, float],
@@ -198,16 +199,18 @@ Examples:
     )
     parser.add_argument(
         "--interposer-adapter", default=None,
-        help="Interposer adapter shortname or .drc path. Numeric "
-             "drc_rules[] overrides in the adapter are merged on top of "
-             "config/rule_params.json defaults.",
+        help="Interposer adapter: a registry id (see "
+             "docs/adapter_contract.md); resolved through the ADK registry "
+             "only. A path is refused. Numeric drc_rules[] overrides in the "
+             "adapter are merged on top of config/rule_params.json defaults.",
     )
     parser.add_argument(
         "--interconnect-adapter", default=None,
-        help="Optional interconnect adapter shortname or .drc path. Adds a "
-             "provenance comment for the bump pitch/spacing axis (IXN rules, "
-             "post-layout only). Omit for interposer-only output (identical to "
-             "before this axis existed).",
+        help="Optional interconnect adapter: a registry id (see "
+             "docs/adapter_contract.md); resolved through the ADK registry "
+             "only. A path is refused. Adds a provenance comment for the bump "
+             "pitch/spacing axis (IXN rules, post-layout only). Omit for "
+             "interposer-only output (identical to before this axis existed).",
     )
     parser.add_argument(
         "--out", default=None,
@@ -259,6 +262,13 @@ def main():
             Path(args.out).write_text(rendered)
         else:
             sys.stdout.write(rendered)
+    # The registry failures come first and keep their own exit codes: an
+    # unknown/malformed adapter id (or a path where an id belongs) is 1, an
+    # unusable registry is 5, an unreadable registry major is 6. Without this
+    # they would escape the tuple below as an uncaught traceback.
+    except adk_registry.RegistryError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return adk_registry.exit_code_for(e)
     except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError,
             jinja2.TemplateError) as e:
         print(f"error: {e}", file=sys.stderr)

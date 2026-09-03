@@ -2,9 +2,11 @@
 """
 ADK assembly DRC runner.
 
-Standalone CLI for the assembly DRC wrapper. Requires an interposer adapter
-(shortname or absolute path) so the wrapper can resolve abstract inputs.
-See docs/adapter_contract.md for the contract.
+Standalone CLI for the assembly DRC wrapper. Requires an interposer adapter,
+named by a REGISTRY ID (never a path), so the wrapper can resolve abstract
+inputs. Adapter ids resolve only through the anchored ADK registry
+(adk_registry); an unregistered deck is registered in a registry layer, never
+passed as a path. See docs/adapter_contract.md for the contract.
 """
 
 import argparse
@@ -20,6 +22,15 @@ from pathlib import Path
 from typing import List, Optional, Set, Union
 
 import klayout.db
+
+# The ADK root holds adk_registry, the single anchored id->location resolver.
+# Bootstrap it onto sys.path so this runner works when invoked by absolute path
+# (the normal case: `python klayout/drc/run_drc.py ...`).
+_ADK_ROOT = Path(__file__).resolve().parents[2]
+if str(_ADK_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ADK_ROOT))
+
+import adk_registry  # noqa: E402
 
 # Exact-match pin on the boundary-manifest version this runner understands;
 # schema and version policy live in docs/boundary_manifest.md. The viewer
@@ -161,42 +172,49 @@ def get_run_top_cell_name(topcell_arg: str, layout_path: str) -> str:
 # ================================================================
 
 
-_ADK_ROOT = Path(__file__).resolve().parents[2]
-_ADAPTER_DIR = _ADK_ROOT / "pdk_adapters" / "interposer"
-_INTERCONNECT_ADAPTER_DIR = _ADK_ROOT / "pdk_adapters" / "interconnect"
+# An adapter is EVALUATED Ruby inside the deck, so the argument that selects
+# one is code selection, not data. It is therefore a registry id and nothing
+# else: no directory join, no CWD-relative path, no ".drc" branch. Both
+# resolvers below never build a Path from their argument, so their return range
+# is by construction a subset of the vetted registry table's values. Do not
+# reintroduce a search directory here.
 
 
-def _resolve_adapter(name_or_path: str, search_dir: Path, kind: str) -> str:
-    """Resolve an adapter argument to an absolute .drc path.
-
-    Accepts either a shortname (resolved against ``search_dir``) or an explicit
-    path to a .drc file. ``kind`` (e.g. "Interposer") names the axis in the
-    error message.
-    """
-    candidate = Path(name_or_path)
-    if candidate.suffix == ".drc" and candidate.is_file():
-        return str(candidate.resolve())
-
-    shortname = name_or_path[:-4] if name_or_path.endswith(".drc") else name_or_path
-    adapter_path = search_dir / f"{shortname}.drc"
-    if adapter_path.is_file():
-        return str(adapter_path.resolve())
-
-    logging.error(
-        f"{kind} adapter not found: '{name_or_path}'. "
-        f"Looked for the literal path and for '{adapter_path}'."
-    )
-    sys.exit(1)
+def resolve_adapter(adapter_id: str) -> str:
+    """Resolve a --interposer-adapter registry id to its vetted .drc path."""
+    try:
+        adk_registry.validate_id(adapter_id, "interposer adapter")
+        res = adk_registry.resolve_adapter(adapter_id)
+    except adk_registry.RegistryError as exc:
+        logging.error("%s", exc)
+        sys.exit(adk_registry.exit_code_for(exc))
+    logging.info("Interposer adapter %r -> %s (registry: %s)",
+                 res.id, res.value, res.source)
+    return str(res.value)
 
 
-def resolve_adapter(name_or_path: str) -> str:
-    """Resolve a --interposer-adapter argument to an absolute .drc path."""
-    return _resolve_adapter(name_or_path, _ADAPTER_DIR, "Interposer")
+def resolve_interconnect_adapter(adapter_id: str) -> str:
+    """Resolve a --interconnect-adapter registry id to its vetted .drc path."""
+    try:
+        adk_registry.validate_id(adapter_id, "interconnect adapter")
+        res = adk_registry.resolve_adapter(adapter_id)
+    except adk_registry.RegistryError as exc:
+        logging.error("%s", exc)
+        sys.exit(adk_registry.exit_code_for(exc))
+    logging.info("Interconnect adapter %r -> %s (registry: %s)",
+                 res.id, res.value, res.source)
+    return str(res.value)
 
 
-def resolve_interconnect_adapter(name_or_path: str) -> str:
-    """Resolve a --interconnect-adapter argument to an absolute .drc path."""
-    return _resolve_adapter(name_or_path, _INTERCONNECT_ADAPTER_DIR, "Interconnect")
+def list_adapters() -> None:
+    """Print every registered adapter id, its deck and the registry that
+    supplied it (the ``--list-adapters`` diagnostic)."""
+    for adapter_id in adk_registry.available("adapter"):
+        try:
+            res = adk_registry.resolve_adapter(adapter_id)
+            print(f"{adapter_id}\t{res.value}\t(registry: {res.source})")
+        except adk_registry.RegistryError as exc:
+            print(f"{adapter_id}\t<unresolved: {exc}>")
 
 
 def _validate_boundary_structure(manifest: dict, manifest_path: Path) -> None:
@@ -444,8 +462,8 @@ def parse_args():
         epilog="""
 Examples:
   %(prog)s --path design.gds --interposer-adapter intm4tm2
-  %(prog)s --path design.gds --interposer-adapter /abs/path/to/custom.drc
   %(prog)s --path design.gds --interposer-adapter intm4tm2 --interconnect-adapter ihp_cupillar
+  %(prog)s --list-adapters
 """,
     )
 
@@ -455,16 +473,22 @@ Examples:
     )
     parser.add_argument(
         "--interposer-adapter", type=str, required=True,
-        help="Interposer adapter: a shortname (resolved against "
-             "pdk_adapters/interposer/<name>.drc) or an absolute path to a "
-             ".drc file.",
+        help="Interposer adapter: a registry id (see "
+             "docs/adapter_contract.md); resolved through the ADK registry "
+             "only. A path is refused.",
     )
     parser.add_argument(
         "--interconnect-adapter", type=str, default=None,
-        help="Optional interconnect adapter: a shortname (resolved against "
-             "pdk_adapters/interconnect/<name>.drc) or an absolute path. Adds "
-             "the bump-to-bump pitch/spacing axis (IXN rules). Omit for "
-             "interposer-only checking (identical to before this axis existed).",
+        help="Optional interconnect adapter: a registry id (see "
+             "docs/adapter_contract.md); resolved through the ADK registry "
+             "only. A path is refused. Adds the bump-to-bump pitch/spacing "
+             "axis (IXN rules). Omit for interposer-only checking (identical "
+             "to before this axis existed).",
+    )
+    parser.add_argument(
+        "--list-adapters", action="store_true",
+        help="List the registered adapter ids with their decks and the "
+             "registry that supplied each, then exit.",
     )
     parser.add_argument(
         "--interconnect-methods", type=str, default=None,
@@ -514,6 +538,12 @@ Examples:
 
 
 def main():
+    # --list-adapters is a diagnostic that needs no input layout, so it is
+    # handled before argparse can demand the required --path.
+    if "--list-adapters" in sys.argv[1:]:
+        list_adapters()
+        return 0
+
     args = parse_args()
 
     now_str = datetime.now(timezone.utc).strftime("adk_drc_run_%Y_%m_%d_%H_%M_%S")
@@ -547,14 +577,19 @@ def main():
         )
         sys.exit(1)
 
-    check_klayout_version()
-    layout_path = check_layout_path(args.path)
-    topcell = get_run_top_cell_name(args.topcell, layout_path)
+    # Adapter resolution runs FIRST, before any tooling probe: an adapter
+    # argument that is not a registered id is refused without spawning KLayout
+    # and without touching the input layout. Do not move this below
+    # check_klayout_version(); a security test pins the order.
     adapter_path = resolve_adapter(args.interposer_adapter)
     interconnect_adapter_path = (
         resolve_interconnect_adapter(args.interconnect_adapter)
         if args.interconnect_adapter else None
     )
+
+    check_klayout_version()
+    layout_path = check_layout_path(args.path)
+    topcell = get_run_top_cell_name(args.topcell, layout_path)
     interconnect_methods_path = (
         resolve_ixn_methods_path(args.interconnect_methods)
         if args.interconnect_methods else None

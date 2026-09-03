@@ -1,0 +1,9 @@
+{
+  "schema": "adk-registry",
+  "version": "1.0",
+  "_comment": "Test registry layer. conftest.py points ADK_REGISTRY_DIR at this directory so the suite drives the closed id-only adapter path end-to-end instead of routing around it. Relative values resolve against this directory. Merged OVER the built-in registry, so every built-in adapter id still resolves.",
+  "adapters": {
+    "test_interposer": "test_interposer_adapter.drc",
+    "test_interconnect": "test_interconnect_adapter.drc"
+  }
+}

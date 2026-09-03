@@ -7,6 +7,7 @@ synthetic adapter at tests/fixtures/test_interposer_adapter.drc.
 """
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -27,25 +28,26 @@ pytestmark = pytest.mark.skipif(
     reason="klayout CLI not on PATH (runner shells `klayout -b`)")
 
 
-def _run(layout: Path, adapter: Path, run_dir: Path,
-         report: Path, legacy: bool = False) -> subprocess.CompletedProcess:
+def _run(layout: Path, adapter_id: str, run_dir: Path,
+         report: Path, legacy: bool = False,
+         env: dict = None) -> subprocess.CompletedProcess:
     cmd = [
         sys.executable, str(RUNNER),
         "--path", str(layout),
-        "--interposer-adapter", str(adapter),
+        "--interposer-adapter", adapter_id,
         "--run_dir", str(run_dir),
         "--report", str(report),
     ]
     if legacy:
         cmd.append("--legacy-exchange0")
-    return subprocess.run(cmd, capture_output=True, text=True)
+    return subprocess.run(cmd, capture_output=True, text=True, env=env)
 
 
-def _violations(layout: Path, adapter: Path, run_dir: Path,
+def _violations(layout: Path, adapter_id: str, run_dir: Path,
                 legacy: bool = False) -> set:
     run_dir = Path(run_dir)
     report = run_dir / "report.lyrdb"
-    proc = _run(layout, adapter, run_dir, report, legacy=legacy)
+    proc = _run(layout, adapter_id, run_dir, report, legacy=legacy)
     assert report.is_file(), (
         f"Report not generated: {report}\n"
         f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
@@ -107,14 +109,29 @@ def test_assembly_pad_outside_triggers_asm_f(fixture_layouts, test_adapter, tmp_
 def test_runner_aborts_when_adapter_missing_required_input(
         fixture_layouts, tmp_path):
     """An adapter that does NOT declare chiplet_attachment_input must cause
-    the runner to exit non-zero with an error naming the missing input."""
+    the runner to exit non-zero with an error naming the missing input.
+
+    The broken deck reaches the runner the only way an unshipped deck can: by
+    being REGISTERED in an operator registry layer (the documented migration
+    route for the removed path form), never by being named as a path.
+    """
     bad_adapter = tmp_path / "broken_adapter.drc"
     bad_adapter.write_text(
         "# Deliberately broken adapter: declares the wrong name.\n"
         "wrong_name = polygons(999, 0)\n"
     )
+    layer_dir = tmp_path / "registry_layer"
+    layer_dir.mkdir()
+    (layer_dir / "registry.json").write_text(json.dumps({
+        "schema": "adk-registry",
+        "version": "1.0",
+        "adapters": {"broken_test_adapter": str(bad_adapter)},
+    }))
+    env = dict(os.environ, ADK_REGISTRY_DIR=str(layer_dir))
+
     report = tmp_path / "report.lyrdb"
-    proc = _run(fixture_layouts["assembly_ok"], bad_adapter, tmp_path, report)
+    proc = _run(fixture_layouts["assembly_ok"], "broken_test_adapter",
+                tmp_path, report, env=env)
     assert proc.returncode != 0, (
         "Runner must abort when adapter is missing required input.\n"
         f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
@@ -269,5 +286,6 @@ def test_interposer_adapter_id_resolves_plain_only():
     assert resolved.endswith("intm4tm2.drc")
     assert Path(resolved).is_file()
     for stale in ("ihp_intm4tm2", "ihp_sg13g2_interposer"):
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit) as exc:
             resolve_adapter(stale)
+        assert exc.value.code == 1

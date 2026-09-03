@@ -17,7 +17,12 @@ GENERATOR = DRU_DIR / "generate_assembly_dru.py"
 GOLDEN = Path(__file__).resolve().parent / "golden" / "assembly_rules.dru.golden"
 
 sys.path.insert(0, str(DRU_DIR))
+if str(ADK_ROOT) not in sys.path:
+    sys.path.insert(0, str(ADK_ROOT))
+
+import adk_registry  # noqa: E402
 from generate_assembly_dru import (  # noqa: E402
+    _apply_overrides,
     _format_number,
     load_defaults,
     load_interconnect_defaults,
@@ -71,7 +76,7 @@ def test_stale_adapter_ids_do_not_resolve():
     pre-rename spellings must NOT resolve: no alias map, no fallback."""
     assert resolve_adapter_path("intm4tm2").name == "intm4tm2.drc"
     for stale in ("ihp_intm4tm2", "ihp_sg13g2_interposer"):
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(adk_registry.IdLookupError):
             resolve_adapter_path(stale)
 
 
@@ -174,24 +179,49 @@ def test_override_literal_with_comment_parsed(tmp_path):
     assert parse_adapter_overrides(adapter) == {"ASM_b": 40.0}
 
 
-def test_main_rejects_unknown_override_key(tmp_path):
+# The override validation is exercised through the PARSE api, not through a CLI
+# adapter flag: adapter selection is id-only, so an ad-hoc .drc in a tmp dir can
+# never be named on the command line. What is under test here is the value
+# check, which is independent of how the deck was selected.
+
+def test_unknown_override_key_is_rejected(tmp_path):
     adapter = tmp_path / "bad_key.drc"
     adapter.write_text("drc_rules['ASM_z'] = 10.0\n")
-    proc = subprocess.run(
-        [sys.executable, str(GENERATOR), "--interposer-adapter", str(adapter)],
-        capture_output=True, text=True)
-    assert proc.returncode == 1
-    assert "unknown rule key" in proc.stderr and "ASM_z" in proc.stderr
+    with pytest.raises(ValueError) as exc:
+        _apply_overrides(load_defaults(), parse_adapter_overrides(adapter),
+                         adapter, "Interposer")
+    assert "unknown rule key" in str(exc.value) and "ASM_z" in str(exc.value)
 
 
-def test_main_rejects_negative_override(tmp_path):
+def test_negative_override_is_rejected(tmp_path):
     adapter = tmp_path / "neg.drc"
     adapter.write_text("drc_rules['ASM_b'] = -50\n")
+    with pytest.raises(ValueError) as exc:
+        _apply_overrides(load_defaults(), parse_adapter_overrides(adapter),
+                         adapter, "Interposer")
+    assert "non-negative" in str(exc.value)
+
+
+def test_negative_interconnect_override_is_rejected(tmp_path):
+    adapter = tmp_path / "neg_ixn.drc"
+    adapter.write_text("interconnect_rules['IXN_pitch'] = -75\n")
+    with pytest.raises(ValueError) as exc:
+        _apply_overrides(load_interconnect_defaults(),
+                         parse_interconnect_overrides(adapter),
+                         adapter, "Interconnect")
+    assert "non-negative" in str(exc.value)
+
+
+def test_main_rejects_unregistered_adapter_id(tmp_path):
+    """A regex-valid but unregistered id is exit 1 with a clean message."""
     proc = subprocess.run(
-        [sys.executable, str(GENERATOR), "--interposer-adapter", str(adapter)],
+        [sys.executable, str(GENERATOR),
+         "--interposer-adapter", "definitely_not_registered"],
         capture_output=True, text=True)
     assert proc.returncode == 1
-    assert "non-negative" in proc.stderr
+    assert "unknown adapter id" in proc.stderr
+    # The CLI refusal for the removed PATH form lives in
+    # tests/test_adapter_id_only.py (the security acceptance module).
 
 
 def test_main_missing_rule_params_clean_error(tmp_path):

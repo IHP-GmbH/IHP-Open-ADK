@@ -32,7 +32,9 @@ RUNNER = ADK_ROOT / "klayout" / "drc" / "run_drc.py"
 pytestmark = pytest.mark.skipif(
     shutil.which("klayout") is None,
     reason="klayout CLI not on PATH (runner shells `klayout -b`)")
-TEST_ADAPTER = Path(__file__).resolve().parent / "fixtures" / "test_interposer_adapter.drc"
+# Adapters are named by registry id only; tests/fixtures/registry.json (wired
+# in by conftest's session registry_layer fixture) declares this one.
+TEST_ADAPTER_ID = "test_interposer"
 
 ATTACHMENT_LAYER = (999, 0)  # must match test_interposer_adapter.drc
 
@@ -78,7 +80,7 @@ def _run(layout, run_dir, report, interconnect_adapter=None,
     cmd = [
         sys.executable, str(RUNNER),
         "--path", str(layout),
-        "--interposer-adapter", str(TEST_ADAPTER),
+        "--interposer-adapter", TEST_ADAPTER_ID,
         "--run_dir", str(run_dir),
         "--report", str(report),
     ]
