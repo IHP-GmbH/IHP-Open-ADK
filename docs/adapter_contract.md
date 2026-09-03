@@ -6,13 +6,23 @@ READMEs under `pdk_adapters/`, and the top-level `README.md`.
 ## The contract sentence
 
 > The `.chiplet` adapter field carries a registry **id** matching
-> `\A[A-Za-z0-9_][A-Za-z0-9_.-]*\Z`; producers validate at emit, consumers
-> validate at use and resolve only through the anchored registry; no component
-> maps that field onto a path, an environment variable, or a hatch flag.
+> `\A[A-Za-z0-9_][A-Za-z0-9_.-]*\Z` and NOT ending in `.drc`; producers validate
+> at emit, consumers validate at use and resolve only through the anchored
+> registry; no component maps that field onto a path, an environment variable,
+> or a hatch flag.
 
-That single sentence is meant to appear, unchanged, in every component that
-touches the field: the ADK (here), the KiCad plugin that emits it, and the
-Mosaic facade that forwards it.
+The canonical form of this contract is the `*.adapter` fields of
+`chiplet-spec/schemas/chiplet.schema.json`: the id pattern PLUS
+`"not": {"pattern": "\\.drc$"}`. That PAIR, not the bare pattern, is the
+contract. `adk_registry.validate_adapter_id` implements it; the generic
+`validate_id` is only the first half and accepts, e.g., `evil.drc`. Every
+implementation -- the ADK here, the KiCad plugin that emits the field, the
+Mosaic engine, and chiplet-studio -- parity-tests against one shared oracle,
+`chiplet-spec conformance/fixtures/adapter_id_cases.json` (vendored at
+`tests/fixtures/adapter_id_cases.json`), so no consumer verdict silently
+diverges. The anchor translates per dialect (`\Z` in Python, `(?![\s\S])` in the
+schema and any ECMA/portable port, no end anchor in a C++ `regex_match`); never
+copy it across engines.
 
 ## Why an id and not a path
 
@@ -27,18 +37,28 @@ archive choose the code the DRC runs, with the attacker's choice of outcome:
   fab-bound geometry, discovered only in silicon; this is the worse outcome;
 - a *hostile* deck is straightforward code execution.
 
-The id shape does the discrimination for free. `\A...\Z` forbids `/`, `\`,
-`~`, a leading `.` or `-`, `..`, `${...}` and a trailing newline, so no real
+The id shape does most of the discrimination for free. `\A...\Z` forbids `/`,
+`\`, `~`, a leading `.` or `-`, `..`, `${...}` and a trailing newline, so no real
 path can pass it; and even if one did, the lookup fails closed, because a path
 is not a key in the registry table.
+
+One value slips through the shape alone: a bare `.drc` file name like `evil.drc`
+is a valid id SHAPE (letters and dots), so `validate_id` accepts it, and only the
+registry lookup would then refuse it (it is not a key). The adapter field
+therefore carries the extra `.drc` negative, and `validate_adapter_id` refuses
+`evil.drc` at validation, in the producer as well as the consumer, so the
+producer never emits it and all three roads reject the same set. `x.drcx` and a
+bare `drc` are ids, not deck names, and stay valid.
 
 ## Producer / consumer split
 
 **Producers** (anything that writes a `.chiplet`: the KiCad plugin, exporters,
-hand-authored documents) validate the field **at emit** against the pattern
-above. Import `adk_registry.validate_id`, or mirror `ID_PATTERN` with the
-`\A`/`\Z` anchors; a `^...$` port silently re-opens the trailing-newline case,
-because in Python `$` also matches just before a final newline.
+hand-authored documents) validate the field **at emit** against the PAIR. Call
+`adk_registry.validate_adapter_id` (id pattern plus the `.drc` negative), or
+validate against `chiplet.schema.json`'s `*.adapter` directly; a port that
+mirrors only `ID_PATTERN`, or that anchors with `^...$` instead of `\A`/`\Z`,
+silently accepts `evil.drc` or a trailing-newline id (in Python `$` also matches
+just before a final newline).
 
 **Consumers** (this repository: `klayout/drc/run_drc.py` and
 `kicad/dru/generate_assembly_dru.py`) validate the field **at use** and then

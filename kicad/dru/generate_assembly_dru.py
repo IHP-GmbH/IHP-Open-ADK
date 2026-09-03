@@ -146,13 +146,13 @@ def _apply_overrides(base: Dict[str, float], overrides: Dict[str, float],
 
 def resolve_adapter_path(adapter_id: str) -> Path:
     """Resolve an interposer adapter registry id to its vetted .drc path."""
-    adk_registry.validate_id(adapter_id, "interposer adapter")
+    adk_registry.validate_adapter_id(adapter_id, "interposer adapter")
     return adk_registry.resolve_adapter(adapter_id).value
 
 
 def resolve_interconnect_adapter_path(adapter_id: str) -> Path:
     """Resolve an interconnect adapter registry id to its vetted .drc path."""
-    adk_registry.validate_id(adapter_id, "interconnect adapter")
+    adk_registry.validate_adapter_id(adapter_id, "interconnect adapter")
     return adk_registry.resolve_adapter(adapter_id).value
 
 

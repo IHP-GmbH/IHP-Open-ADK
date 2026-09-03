@@ -85,6 +85,7 @@ __all__ = [
     "exit_code_for",
     "Resolution",
     "validate_id",
+    "validate_adapter_id",
     "resolve_adapter",
     "resolve_root",
     "resolve_interpreter",
@@ -214,6 +215,29 @@ def validate_id(raw: object, namespace: Optional[str] = None) -> str:
     raise IdLookupError(
         f"malformed registry id{where}: {raw!r} (must match {ID_PATTERN})."
     )
+
+
+def validate_adapter_id(raw: object, namespace: Optional[str] = None) -> str:
+    """Validate an ``*.adapter`` field value and return it unchanged.
+
+    The adapter field's contract is the schema PAIR, not the bare id shape:
+    ``chiplet.schema.json``'s ``interposer.adapter`` / ``interconnect.adapter``
+    carry ``ID_PATTERN`` PLUS ``"not": {"pattern": "\\.drc$"}``. :func:`validate_id`
+    alone accepts ``evil.drc`` (a valid id shape); the adapter field rejects it,
+    because an adapter is selected by registry id, never by a deck file name. The
+    ``.drc`` negative belongs to the adapter FIELD, so it lives here and is NOT
+    folded into the generic :func:`validate_id`. The shared oracle proving parity
+    with the schema is chiplet-spec ``conformance/fixtures/adapter_id_cases.json``.
+    """
+    value = validate_id(raw, namespace)
+    if value.endswith(".drc"):
+        where = f" for {namespace}" if namespace else ""
+        raise IdLookupError(
+            f"a .drc deck file name was given where a registry id is "
+            f"required{where}: {value!r}. An adapter is selected by registry id, "
+            f"never by a deck file name; register the deck and reference it by id."
+        )
+    return value
 
 
 # --------------------------------------------------------------------------- #

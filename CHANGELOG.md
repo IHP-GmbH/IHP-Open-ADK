@@ -26,6 +26,12 @@ Landed since 0.2.0, not yet tied to a contract bump.
   probing the KLayout binary, and reports the registry that answered; the DRU
   generator maps registry failures onto exit 1/5/6 instead of a traceback. The
   deck splices the adapter path into eval'd Ruby as an inspected literal.
+  `adk_registry.validate_adapter_id` extends the id check with the adapter
+  field's `.drc` negative (an `evil.drc`-shaped id is refused at validation, not
+  only at lookup), matching `chiplet.schema.json`'s `*.adapter` pair; a parity
+  test runs the shared chiplet-spec oracle
+  (`tests/fixtures/adapter_id_cases.json`) so the ADK, the KiCad plugin,
+  chiplet-studio and the Mosaic engine reject the same set.
 - Hardened the frame-contract handling shared with the interposer pipeline.
   `checks/pads_vs_pillars.py` now validates each die's `anchor:`: it supports
   only `gds_origin` (die-local pads + `position`, its existing transform); a die

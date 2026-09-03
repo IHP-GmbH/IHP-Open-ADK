@@ -183,7 +183,7 @@ def get_run_top_cell_name(topcell_arg: str, layout_path: str) -> str:
 def resolve_adapter(adapter_id: str) -> str:
     """Resolve a --interposer-adapter registry id to its vetted .drc path."""
     try:
-        adk_registry.validate_id(adapter_id, "interposer adapter")
+        adk_registry.validate_adapter_id(adapter_id, "interposer adapter")
         res = adk_registry.resolve_adapter(adapter_id)
     except adk_registry.RegistryError as exc:
         logging.error("%s", exc)
@@ -196,7 +196,7 @@ def resolve_adapter(adapter_id: str) -> str:
 def resolve_interconnect_adapter(adapter_id: str) -> str:
     """Resolve a --interconnect-adapter registry id to its vetted .drc path."""
     try:
-        adk_registry.validate_id(adapter_id, "interconnect adapter")
+        adk_registry.validate_adapter_id(adapter_id, "interconnect adapter")
         res = adk_registry.resolve_adapter(adapter_id)
     except adk_registry.RegistryError as exc:
         logging.error("%s", exc)
