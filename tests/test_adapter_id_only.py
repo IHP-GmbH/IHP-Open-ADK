@@ -191,3 +191,25 @@ def test_builtin_ids_still_resolve(adapter_id):
     resolved = Path(run_drc.resolve_adapter(adapter_id))
     assert resolved.is_file()
     assert generate_assembly_dru.resolve_adapter_path(adapter_id) == resolved
+
+
+# --------------------------------------------------------------------------- #
+# run_assembly_drc: the in-process door has the lock too                         #
+# --------------------------------------------------------------------------- #
+# run_assembly_drc EVALs the adapter and is importable, so an in-process caller
+# (Studio, Mosaic) that forwards a document-derived path must be refused at the
+# entry, before any KLayout spawn -- the CLI resolver is not the only door.
+# PLUG-6 showed an upstream guard can be bypassed, so this is a real leg, not
+# belt-and-suspenders. The guard fires with no KLayout binary present.
+def test_run_assembly_drc_refuses_an_unvetted_interposer_path(tmp_path):
+    with pytest.raises(adk_registry.IdLookupError):
+        run_drc.run_assembly_drc(
+            str(tmp_path / "x.gds"), "/tmp/planted_evil.drc", "TOP", tmp_path)
+
+
+def test_run_assembly_drc_refuses_an_unvetted_interconnect_path(tmp_path):
+    vetted = str(Path(run_drc.resolve_adapter("test_interposer")))
+    with pytest.raises(adk_registry.IdLookupError):
+        run_drc.run_assembly_drc(
+            str(tmp_path / "x.gds"), vetted, "TOP", tmp_path,
+            interconnect_adapter_path="/tmp/planted_evil.drc")

@@ -377,15 +377,39 @@ def run_assembly_drc(layout_path: str, adapter_path: str, topcell: str,
                      manifest_path: Optional[Path] = None,
                      legacy_exchange0: bool = False,
                      interconnect_adapter_path: Optional[str] = None,
-                     interconnect_methods_path: Optional[Path] = None) -> Path:
+                     interconnect_methods_path: Optional[Path] = None,
+                     *, unvetted_ok: bool = False) -> Path:
     """Run the ADK assembly DRC wrapper via klayout -b.
 
     Chiplet boundaries come from the producer's boundary manifest
     (``manifest_path``) unless ``legacy_exchange0`` is set, in which case the
     deck reads the historical exchange0 fab layer from the GDS.
 
+    ``adapter_path`` (and ``interconnect_adapter_path``) name Ruby the deck
+    ``eval``s, so this function will only run a deck the registry produced. The
+    CLI passes values straight from :func:`resolve_adapter`, but this function is
+    importable and an in-process caller (Studio, Mosaic) forwards
+    document-derived values; PLUG-6 showed an upstream guard can be bypassed, so
+    the last enforcement point re-checks here rather than trusting the caller.
+    Pass ``unvetted_ok=True`` only from a context that has established the path
+    by other means.
+
     Returns the path to the generated .lyrdb report.
     """
+    if not unvetted_ok:
+        vetted = {str(adk_registry.resolve_adapter(i).value)
+                  for i in adk_registry.available("adapter")}
+        for axis, candidate in (("interposer", adapter_path),
+                                ("interconnect", interconnect_adapter_path)):
+            if candidate is not None and str(candidate) not in vetted:
+                raise adk_registry.IdLookupError(
+                    f"{axis} adapter path {str(candidate)!r} is not a "
+                    f"registry-resolved adapter; run_assembly_drc runs only "
+                    f"vetted decks. Resolve the adapter by id "
+                    f"(adk_registry.resolve_adapter) or, in a trusted context, "
+                    f"pass unvetted_ok=True."
+                )
+
     drc_script = str(_ADK_ROOT / "klayout" / "drc" / "adk_assembly.drc")
     layout_stem = Path(layout_path).stem
     if report_path is None:
@@ -609,6 +633,13 @@ def main():
             interconnect_adapter_path=interconnect_adapter_path,
             interconnect_methods_path=interconnect_methods_path,
         )
+    except adk_registry.RegistryError as e:
+        # run_assembly_drc's vetted-adapter guard fired. In the CLI this cannot
+        # happen (adapter_path came from resolve_adapter above); it is here so a
+        # future refactor that reordered the two could not turn the guard into
+        # an uncaught traceback. Same exit-code table as resolve_adapter.
+        logging.error("%s", e)
+        return adk_registry.exit_code_for(e)
     except subprocess.CalledProcessError as e:
         # The deck (klayout) exited non-zero: an adapter missing a required
         # input, a deck raise, etc. The KLayout error is already on stderr and
