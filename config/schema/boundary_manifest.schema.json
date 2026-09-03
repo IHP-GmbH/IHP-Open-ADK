@@ -7,7 +7,11 @@
     "required": ["schema", "version", "boundaries"],
     "properties": {
         "schema": { "const": "adk-boundary-manifest" },
-        "version": { "type": "string" },
+        "version": {
+            "type": "string",
+            "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$",
+            "description": "Contract version, quoted MAJOR.MINOR or MAJOR.MINOR.PATCH. Structural only: WHICH versions a consumer accepts is the shared version policy of docs/VERSION_POLICY.md (same major, minor at or below supported accepted; same-major higher minor accepted with a warning; different major refused; PATCH ignored), applied by chiplet_format_io.check_contract_version. Supported: 1.0."
+        },
         "generator": { "type": "string" },
         "assembly_gds": { "type": "string" },
         "assembly_gds_sha256": { "type": "string" },

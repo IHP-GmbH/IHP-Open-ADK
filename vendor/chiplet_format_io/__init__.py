@@ -18,6 +18,25 @@ Typical use::
     assembly = cfio.load("design.chiplet")      # -> dict, validated
     assembly["assembly"]["name"] = "renamed"
     cfio.dump(assembly, "design.chiplet")
+
+Version policy (docs/VERSION_POLICY.md). One rule governs every versioned
+artifact in the format family: same major with a minor at or below the supported
+one is accepted, a same-major higher minor is accepted with a warning, a
+different major or a malformed value is refused, and PATCH is ignored.
+:func:`check_format_version` applies it to a ``.chiplet``'s own
+``format_version``; :func:`check_contract_version` applies it to any governed
+sidecar (``io_pads.json``, ``pins.json``, the black-box padmap, the boundary
+manifest, ``interconnect_methods.json``)::
+
+    cfio.check_contract_version(doc["version"], "1.0", name="io_pads.json")
+
+Two version constants, and they answer different questions.
+:data:`SUPPORTED_FORMAT_VERSION` is the highest ``.chiplet`` ``format_version``
+this reader was written for, i.e. a fact about documents. :data:`__version__` is
+the release of the reader itself, and it is the value a VENDORED copy of this
+file carries into the tool that embedded it. That is what makes byte identity
+unnecessary: a consumer requires a reader release (``cfio.__version__``) and a
+document version, and never has to hash a copied file to find out what it has.
 """
 from __future__ import annotations
 
@@ -28,8 +47,12 @@ import yaml
 
 __all__ = [
     "SUPPORTED_FORMAT_VERSION",
+    "__version__",
     "ChipletFormatError",
+    "ContractVersionError",
+    "ContractVersionWarning",
     "FormatVersionWarning",
+    "check_contract_version",
     "check_format_version",
     "loads",
     "load",
@@ -44,17 +67,43 @@ __all__ = [
 #: single exported string constant, never re-derived from a bump.
 SUPPORTED_FORMAT_VERSION = "1.0"
 
+#: The release of THIS reader, and the value a vendored copy carries with it.
+#: Distinct from :data:`SUPPORTED_FORMAT_VERSION`, which is about the documents:
+#: one says what is on disk, the other says which reader is in the tree. It is the
+#: distribution version too (``pyproject.toml`` reads it from here), so a consumer
+#: that installed the package and one that vendored the file agree on the number.
+#: Bumped under the same policy as everything else (docs/VERSION_POLICY.md).
+__version__ = "1.1.0"
+
 
 class ChipletFormatError(ValueError):
     """Raised when a .chiplet document is malformed or unsupported."""
 
 
-class FormatVersionWarning(UserWarning):
-    """A .chiplet declares a newer same-major minor than the reader supports.
+class ContractVersionError(ChipletFormatError):
+    """A governed artifact declares a version this consumer cannot read.
 
-    The document is still read (as the supported version, ignoring unknown
-    additions), but a same-major higher minor may carry fields this reader does
+    Raised by :func:`check_contract_version` for a malformed version string or a
+    different major. A subclass of :class:`ChipletFormatError` so a consumer that
+    already catches that keeps working; catch this one to tell "the version is
+    wrong" apart from "the document is wrong".
+    """
+
+
+class ContractVersionWarning(UserWarning):
+    """A governed artifact declares a newer same-major minor than is supported.
+
+    The artifact is still read (as the supported version, ignoring unknown
+    additions), but a same-major higher minor may carry fields this consumer does
     not understand, so the event is surfaced.
+    """
+
+
+class FormatVersionWarning(ContractVersionWarning):
+    """The .chiplet-specific spelling of :class:`ContractVersionWarning`.
+
+    Kept as its own class because callers filter on it by name; a subclass so a
+    consumer can catch the general case for every governed artifact at once.
     """
 
 
@@ -130,6 +179,85 @@ def check_format_version(fv: Any, *,
         if normalized not in _WARNED_VERSIONS:
             _WARNED_VERSIONS.add(normalized)
             warnings.warn(msg, FormatVersionWarning, stacklevel=2)
+    return normalized
+
+
+def _parse_contract_version(value: Any) -> Optional[Tuple[int, int]]:
+    """Parse a governed-sidecar version into ``(major, minor)``; ``None`` if not.
+
+    Accepts a quoted ``"MAJOR.MINOR"`` or ``"MAJOR.MINOR.PATCH"`` string. PATCH is
+    parsed only to be discarded: a patch never changes what a consumer may
+    assume, so it must never change a verdict either. Unlike
+    :func:`_parse_version` (the ``.chiplet`` ``format_version``, which is
+    MAJOR.MINOR only and is pinned that way by schemas/chiplet.schema.json), a
+    non-string is NOT coerced: the sidecars are JSON, where an unquoted 1.10 is
+    the number 1.1 with no way back, so a bare number is malformed here.
+    """
+    if not isinstance(value, str):
+        return None
+    parts = value.strip().split(".")
+    if len(parts) not in (2, 3):
+        return None
+    try:
+        numbers = [int(p) for p in parts]
+    except ValueError:
+        return None
+    if any(n < 0 for n in numbers):
+        return None
+    return (numbers[0], numbers[1])
+
+
+def check_contract_version(value: Any, supported: str, *, name: str,
+                           on_warn: Optional[Callable[[str], None]] = None) -> str:
+    """Apply the version policy to any governed artifact; return "MAJOR.MINOR".
+
+    One rule for every governed sidecar (docs/VERSION_POLICY.md), the same one
+    :func:`check_format_version` applies to a ``.chiplet``: a quoted
+    ``MAJOR.MINOR`` or ``MAJOR.MINOR.PATCH`` string; same major with a minor at or
+    below ``supported`` accepted silently; same major with a HIGHER minor accepted
+    with a warning (the artifact may carry additions this consumer does not
+    understand); a different major, a missing value or a malformed one refused
+    with :class:`ContractVersionError`; PATCH ignored throughout.
+
+    ``name`` identifies the artifact in messages (e.g. ``"io_pads.json"``), and is
+    part of the warn-once key so two sidecars never suppress each other's warning.
+    ``on_warn`` receives every event undeduped; the default ``warnings`` channel is
+    deduped per (name, version), matching :func:`check_format_version`.
+
+    The point is that a consumer gates on the CONTRACT, not on byte identity with
+    a vendored copy: an emitter that ships a compatible minor keeps working, and
+    an incompatible major fails loudly at the boundary instead of half-parsing.
+    """
+    sup = _parse_contract_version(supported)
+    if sup is None:
+        raise ValueError(
+            f"supported version {supported!r} for {name} is not a "
+            f'"MAJOR.MINOR" string')
+    sup_major, sup_minor = sup
+    if value is None:
+        raise ContractVersionError(f"{name}: missing required key: version")
+    parsed = _parse_contract_version(value)
+    if parsed is None:
+        raise ContractVersionError(
+            f"{name}: malformed version {value!r}; expected a quoted "
+            f'"MAJOR.MINOR" or "MAJOR.MINOR.PATCH" string')
+    major, minor = parsed
+    if major != sup_major:
+        raise ContractVersionError(
+            f"{name}: unsupported version {value!r}; this consumer supports "
+            f"major {sup_major} (e.g. {supported!r})")
+    normalized = f"{major}.{minor}"
+    if minor > sup_minor:
+        msg = (
+            f"{name}: version {value!r} is newer than the supported "
+            f"{supported!r} (same major {major}); reading it as {supported!r} "
+            f"and ignoring unknown additions")
+        if on_warn is not None:
+            on_warn(msg)
+        key = (name, normalized)
+        if key not in _WARNED_VERSIONS:
+            _WARNED_VERSIONS.add(key)
+            warnings.warn(msg, ContractVersionWarning, stacklevel=2)
     return normalized
 
 
