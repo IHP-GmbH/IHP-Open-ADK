@@ -8,6 +8,12 @@ match the latest released entry.
 
 Landed since 0.2.0, not yet tied to a contract bump.
 
+- Vendored `chiplet_format_io` reader bumped 1.1.0 -> 1.3.0 (verbatim from
+  chiplet-spec `0d850ca`). 1.3.0 rejects the non-LF/CRLF line breaks a smuggled
+  value can hide behind (NEL U+0085, U+2028, U+2029); `SUPPORTED_FORMAT_VERSION`
+  is unchanged (1.0), so every existing `.chiplet` still loads. The vendored
+  adapter oracle (`tests/fixtures/adapter_id_cases.json`) is unchanged (same
+  sha256); its provenance note now points at chiplet-spec `origin/dev`.
 - BREAKING: adapters are selected by REGISTRY ID ONLY. `run_drc.py` and
   `kicad/dru/generate_assembly_dru.py` no longer accept a path for
   `--interposer-adapter` / `--interconnect-adapter`, and no longer join a
