@@ -166,9 +166,15 @@ end
 #------------------------------------------------------------------------------
 required_inputs = ['chiplet_attachment_input']
 
-adapter_path_literal = $adapter
+# The adapter path is spliced into Ruby source that is eval'd below, so it goes
+# in as an INSPECTED literal (a quoted, escaped Ruby string), never raw: a raw
+# splice would let a path containing a quote or a #{...} inject Ruby through the
+# FILENAME alone, independent of the deck's contents. The path is
+# registry-controlled today; this keeps the splice safe by construction. The
+# rendered message is unchanged for any ordinary path.
+adapter_path_literal = $adapter.inspect
 validation_code = required_inputs.map { |name|
-  "raise \"Interposer adapter (#{adapter_path_literal}) must declare '#{name}'.\" " \
+  "raise \"Interposer adapter (\" + #{adapter_path_literal} + \") must declare '#{name}'.\" " \
   "unless defined?(#{name}) && !#{name}.nil?"
 }.join("\n")
 
@@ -185,8 +191,10 @@ parts = [
 if interconnect_adapter
   parts << File.read(interconnect_adapter)
   ixn_required = ['IXN_spacing', 'IXN_pitch', 'IXN_pad_size']
+  # Same rule as the interposer path above: inspected literal, never raw.
+  interconnect_adapter_literal = interconnect_adapter.inspect
   parts << ixn_required.map { |k|
-    "raise \"Interconnect adapter (#{interconnect_adapter}) must set " \
+    "raise \"Interconnect adapter (\" + #{interconnect_adapter_literal} + \") must set " \
     "interconnect_rules['#{k}'].\" unless interconnect_rules.key?('#{k}')"
   }.join("\n")
 end

@@ -8,6 +8,30 @@ match the latest released entry.
 
 Landed since 0.2.0, not yet tied to a contract bump.
 
+- BREAKING: adapters are selected by REGISTRY ID ONLY. `run_drc.py` and
+  `kicad/dru/generate_assembly_dru.py` no longer accept a path for
+  `--interposer-adapter` / `--interconnect-adapter`, and no longer join a
+  shortname onto `pdk_adapters/<axis>/`; both resolve through `adk_registry`
+  and nothing else. The old resolvers accepted any existing `.drc` (absolute or
+  CWD-relative) and let a shortname like `../interconnect/ihp_cupillar` escape
+  the vetted directory, which mattered because the adapter is `eval`'d Ruby and
+  the field naming it comes from an untrusted `.chiplet`. Removed with no
+  deprecation window: a window keeps the hole open for its length. Shipped ids
+  (`intm4tm2`, `ihp_cupillar`, `ihp_sbump`, `vendorx_microbump`) are unchanged.
+  To use an unregistered deck, register it in a registry layer
+  (`$ADK_REGISTRY_DIR/registry.json` or
+  `$XDG_CONFIG_HOME/adk-tools/registry.json`) and name the id; see the new
+  `docs/adapter_contract.md`, which the code has referenced since 0.2.0 without
+  it existing. `run_drc.py` gains `--list-adapters`, resolves adapters before
+  probing the KLayout binary, and reports the registry that answered; the DRU
+  generator maps registry failures onto exit 1/5/6 instead of a traceback. The
+  deck splices the adapter path into eval'd Ruby as an inspected literal.
+  `adk_registry.validate_adapter_id` extends the id check with the adapter
+  field's `.drc` negative (an `evil.drc`-shaped id is refused at validation, not
+  only at lookup), matching `chiplet.schema.json`'s `*.adapter` pair; a parity
+  test runs the shared chiplet-spec oracle
+  (`tests/fixtures/adapter_id_cases.json`) so the ADK, the KiCad plugin,
+  chiplet-studio and the Mosaic engine reject the same set.
 - Hardened the frame-contract handling shared with the interposer pipeline.
   `checks/pads_vs_pillars.py` now validates each die's `anchor:`: it supports
   only `gds_origin` (die-local pads + `position`, its existing transform); a die

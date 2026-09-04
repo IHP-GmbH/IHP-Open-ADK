@@ -92,9 +92,13 @@ carries boundaries on the exchange0 fab layer instead of a manifest.
 
 The `--interposer-adapter` flag selects which adapter under
 `pdk_adapters/interposer/` satisfies the contract; `--interconnect-adapter`
-selects one under `pdk_adapters/interconnect/`. Each accepts a shortname or an
-explicit `.drc` path. Every adapter MUST declare the abstract inputs documented
-in `docs/adapter_contract.md`; the deck validates this before evaluating rules.
+selects one under `pdk_adapters/interconnect/`. Each takes a REGISTRY ID, never
+a path: the adapter is evaluated as code, so it is resolved only through the
+anchored registry (`--list-adapters` prints what is registered). An
+unregistered deck is made reachable by registering an id for it, not by naming
+its path; see `docs/adapter_contract.md`. Every adapter MUST declare the
+abstract inputs documented there; the deck validates this before evaluating
+rules.
 
 ## Checking pad-to-pillar alignment
 
