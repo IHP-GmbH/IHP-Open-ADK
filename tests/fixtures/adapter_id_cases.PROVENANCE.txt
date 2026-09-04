@@ -2,10 +2,10 @@ adapter_id_cases.json -- vendored oracle, provenance
 ====================================================
 
 Source:        chiplet-spec, conformance/fixtures/adapter_id_cases.json
-Pinned commit: 41264bc (chiplet-spec; local at vendor time. chiplet-spec never
-               rebases or force-pushes, so this object is final; the remote sha
-               is the same one once its dev is pushed. Flip this line to
-               "on origin/dev" once that push is confirmed.)
+Pinned commit: on chiplet-spec origin/dev at 0d850ca (verified). The oracle is
+               unchanged since 41264bc, where it was first vendored; chiplet-spec
+               never rebases or force-pushes, so the object is final and the
+               content sha below is identical across both commits.
 Content sha256: 0364a6f2a2da84f9651af8283b1c456638e6897d174d105f271ed46ddfb80eb1
 Vendored:      byte-identical, no edits.
 
