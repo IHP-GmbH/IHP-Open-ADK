@@ -2,9 +2,11 @@
 """
 ADK assembly DRC runner.
 
-Standalone CLI for the assembly DRC wrapper. Requires an interposer adapter
-(shortname or absolute path) so the wrapper can resolve abstract inputs.
-See docs/adapter_contract.md for the contract.
+Standalone CLI for the assembly DRC wrapper. Requires an interposer adapter,
+named by a REGISTRY ID (never a path), so the wrapper can resolve abstract
+inputs. Adapter ids resolve only through the anchored ADK registry
+(adk_registry); an unregistered deck is registered in a registry layer, never
+passed as a path. See docs/adapter_contract.md for the contract.
 """
 
 import argparse
@@ -17,9 +19,35 @@ import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Set, Union
+from typing import Dict, List, Optional, Set, Union
 
 import klayout.db
+
+# The ADK root holds adk_registry, the single anchored id->location resolver.
+# Bootstrap it onto sys.path so this runner works when invoked by absolute path
+# (the normal case: `python klayout/drc/run_drc.py ...`).
+_ADK_ROOT = Path(__file__).resolve().parents[2]
+if str(_ADK_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ADK_ROOT))
+
+import adk_registry  # noqa: E402
+
+# Exit codes of this runner. 0 and 1 are verdicts, and only for a run that
+# reached the deck, ran it to completion and came back with a valid report:
+#   0  clean: the deck ran to the end, the report has no item
+#   1  findings: the deck ran to the end, some rule has items
+#   2  engine failure: the deck aborted (KLayout's own exit for a raise is 1,
+#      which is why it is not passed through) or wrote no report
+# This table does NOT classify every exit of this process. The paths around the
+# deck keep their own codes: argument validation and the input/sidecar
+# preconditions exit 1, adapter and registry resolution exits with
+# adk_registry's table (1 usage, 5 source, 6 version, 7 internal) before the
+# deck is spawned, and a report that cannot be parsed raises out of main. So
+# exit 1 is not by itself a findings verdict; a caller that reads any exit 1 as
+# "findings", or any non-zero code as "not clean", is wrong.
+EXIT_CLEAN = 0
+EXIT_FINDINGS = 1
+EXIT_ENGINE = 2
 
 # Exact-match pin on the boundary-manifest version this runner understands;
 # schema and version policy live in docs/boundary_manifest.md. The viewer
@@ -66,6 +94,23 @@ def get_rules_with_violations(results_database: Union[str, Path]) -> Set[str]:
             violating_rules.add(category.text.replace("'", ""))
 
     return violating_rules
+
+
+# The description the deck gives a rule it did not check (8_1_assembly.drc):
+# "<rule> : not applicable: <reason>", over a category with no item.
+NOT_APPLICABLE = " : not applicable: "
+
+
+def get_rules_not_checked(results_database: Union[str, Path]) -> Dict[str, str]:
+    """Rule names the deck reported as not applicable, each with its reason."""
+    root = ET.parse(Path(results_database)).getroot()
+    not_checked = {}
+    for category in root.findall("categories/category"):
+        name = (category.findtext("name") or "").strip().replace("'", "")
+        description = (category.findtext("description") or "").strip()
+        if description.startswith(name + NOT_APPLICABLE):
+            not_checked[name] = description[len(name + NOT_APPLICABLE):]
+    return not_checked
 
 
 # ================================================================
@@ -161,42 +206,49 @@ def get_run_top_cell_name(topcell_arg: str, layout_path: str) -> str:
 # ================================================================
 
 
-_ADK_ROOT = Path(__file__).resolve().parents[2]
-_ADAPTER_DIR = _ADK_ROOT / "pdk_adapters" / "interposer"
-_INTERCONNECT_ADAPTER_DIR = _ADK_ROOT / "pdk_adapters" / "interconnect"
+# An adapter is EVALUATED Ruby inside the deck, so the argument that selects
+# one is code selection, not data. It is therefore a registry id and nothing
+# else: no directory join, no CWD-relative path, no ".drc" branch. Both
+# resolvers below never build a Path from their argument, so their return range
+# is by construction a subset of the vetted registry table's values. Do not
+# reintroduce a search directory here.
 
 
-def _resolve_adapter(name_or_path: str, search_dir: Path, kind: str) -> str:
-    """Resolve an adapter argument to an absolute .drc path.
-
-    Accepts either a shortname (resolved against ``search_dir``) or an explicit
-    path to a .drc file. ``kind`` (e.g. "Interposer") names the axis in the
-    error message.
-    """
-    candidate = Path(name_or_path)
-    if candidate.suffix == ".drc" and candidate.is_file():
-        return str(candidate.resolve())
-
-    shortname = name_or_path[:-4] if name_or_path.endswith(".drc") else name_or_path
-    adapter_path = search_dir / f"{shortname}.drc"
-    if adapter_path.is_file():
-        return str(adapter_path.resolve())
-
-    logging.error(
-        f"{kind} adapter not found: '{name_or_path}'. "
-        f"Looked for the literal path and for '{adapter_path}'."
-    )
-    sys.exit(1)
+def resolve_adapter(adapter_id: str) -> str:
+    """Resolve a --interposer-adapter registry id to its vetted .drc path."""
+    try:
+        adk_registry.validate_adapter_id(adapter_id, "interposer adapter")
+        res = adk_registry.resolve_adapter(adapter_id)
+    except adk_registry.RegistryError as exc:
+        logging.error("%s", exc)
+        sys.exit(adk_registry.exit_code_for(exc))
+    logging.info("Interposer adapter %r -> %s (registry: %s)",
+                 res.id, res.value, res.source)
+    return str(res.value)
 
 
-def resolve_adapter(name_or_path: str) -> str:
-    """Resolve a --interposer-adapter argument to an absolute .drc path."""
-    return _resolve_adapter(name_or_path, _ADAPTER_DIR, "Interposer")
+def resolve_interconnect_adapter(adapter_id: str) -> str:
+    """Resolve a --interconnect-adapter registry id to its vetted .drc path."""
+    try:
+        adk_registry.validate_adapter_id(adapter_id, "interconnect adapter")
+        res = adk_registry.resolve_adapter(adapter_id)
+    except adk_registry.RegistryError as exc:
+        logging.error("%s", exc)
+        sys.exit(adk_registry.exit_code_for(exc))
+    logging.info("Interconnect adapter %r -> %s (registry: %s)",
+                 res.id, res.value, res.source)
+    return str(res.value)
 
 
-def resolve_interconnect_adapter(name_or_path: str) -> str:
-    """Resolve a --interconnect-adapter argument to an absolute .drc path."""
-    return _resolve_adapter(name_or_path, _INTERCONNECT_ADAPTER_DIR, "Interconnect")
+def list_adapters() -> None:
+    """Print every registered adapter id, its deck and the registry that
+    supplied it (the ``--list-adapters`` diagnostic)."""
+    for adapter_id in adk_registry.available("adapter"):
+        try:
+            res = adk_registry.resolve_adapter(adapter_id)
+            print(f"{adapter_id}\t{res.value}\t(registry: {res.source})")
+        except adk_registry.RegistryError as exc:
+            print(f"{adapter_id}\t<unresolved: {exc}>")
 
 
 def _validate_boundary_structure(manifest: dict, manifest_path: Path) -> None:
@@ -359,15 +411,39 @@ def run_assembly_drc(layout_path: str, adapter_path: str, topcell: str,
                      manifest_path: Optional[Path] = None,
                      legacy_exchange0: bool = False,
                      interconnect_adapter_path: Optional[str] = None,
-                     interconnect_methods_path: Optional[Path] = None) -> Path:
+                     interconnect_methods_path: Optional[Path] = None,
+                     *, unvetted_ok: bool = False) -> Path:
     """Run the ADK assembly DRC wrapper via klayout -b.
 
     Chiplet boundaries come from the producer's boundary manifest
     (``manifest_path``) unless ``legacy_exchange0`` is set, in which case the
     deck reads the historical exchange0 fab layer from the GDS.
 
+    ``adapter_path`` (and ``interconnect_adapter_path``) name Ruby the deck
+    ``eval``s, so this function will only run a deck the registry produced. The
+    CLI passes values straight from :func:`resolve_adapter`, but this function is
+    importable and an in-process caller (Studio, Mosaic) forwards
+    document-derived values; PLUG-6 showed an upstream guard can be bypassed, so
+    the last enforcement point re-checks here rather than trusting the caller.
+    Pass ``unvetted_ok=True`` only from a context that has established the path
+    by other means.
+
     Returns the path to the generated .lyrdb report.
     """
+    if not unvetted_ok:
+        vetted = {str(adk_registry.resolve_adapter(i).value)
+                  for i in adk_registry.available("adapter")}
+        for axis, candidate in (("interposer", adapter_path),
+                                ("interconnect", interconnect_adapter_path)):
+            if candidate is not None and str(candidate) not in vetted:
+                raise adk_registry.IdLookupError(
+                    f"{axis} adapter path {str(candidate)!r} is not a "
+                    f"registry-resolved adapter; run_assembly_drc runs only "
+                    f"vetted decks. Resolve the adapter by id "
+                    f"(adk_registry.resolve_adapter) or, in a trusted context, "
+                    f"pass unvetted_ok=True."
+                )
+
     drc_script = str(_ADK_ROOT / "klayout" / "drc" / "adk_assembly.drc")
     layout_stem = Path(layout_path).stem
     if report_path is None:
@@ -413,8 +489,12 @@ def run_assembly_drc(layout_path: str, adapter_path: str, topcell: str,
 def check_drc_results(report_path: Path) -> Set[str]:
     """Parse the report and log a pass/fail banner. Returns the rule set."""
     if not report_path.is_file():
-        logging.error(f"Result database not generated: {report_path}")
-        sys.exit(1)
+        # The deck exited 0 without writing its report: no verdict either.
+        logging.error(
+            "ADK DRC engine failure: result database not generated at %s "
+            "(no findings, no clean result). Exit %d.", report_path, EXIT_ENGINE,
+        )
+        sys.exit(EXIT_ENGINE)
 
     violating_rules = get_rules_with_violations(report_path)
 
@@ -427,6 +507,10 @@ def check_drc_results(report_path: Path) -> Set[str]:
         logging.info("=" * 70)
         logging.info("ADK DRC PASSED: No violations detected")
         logging.info("=" * 70)
+
+    # A rule the deck did not apply is neither passed nor failed: list it apart.
+    for rule, reason in sorted(get_rules_not_checked(report_path).items()):
+        logging.info("ADK DRC not checked: %s (%s)", rule, reason)
 
     logging.info(f"Report: {report_path}")
     return violating_rules
@@ -444,8 +528,8 @@ def parse_args():
         epilog="""
 Examples:
   %(prog)s --path design.gds --interposer-adapter intm4tm2
-  %(prog)s --path design.gds --interposer-adapter /abs/path/to/custom.drc
   %(prog)s --path design.gds --interposer-adapter intm4tm2 --interconnect-adapter ihp_cupillar
+  %(prog)s --list-adapters
 """,
     )
 
@@ -455,16 +539,22 @@ Examples:
     )
     parser.add_argument(
         "--interposer-adapter", type=str, required=True,
-        help="Interposer adapter: a shortname (resolved against "
-             "pdk_adapters/interposer/<name>.drc) or an absolute path to a "
-             ".drc file.",
+        help="Interposer adapter: a registry id (see "
+             "docs/adapter_contract.md); resolved through the ADK registry "
+             "only. A path is refused.",
     )
     parser.add_argument(
         "--interconnect-adapter", type=str, default=None,
-        help="Optional interconnect adapter: a shortname (resolved against "
-             "pdk_adapters/interconnect/<name>.drc) or an absolute path. Adds "
-             "the bump-to-bump pitch/spacing axis (IXN rules). Omit for "
-             "interposer-only checking (identical to before this axis existed).",
+        help="Optional interconnect adapter: a registry id (see "
+             "docs/adapter_contract.md); resolved through the ADK registry "
+             "only. A path is refused. Adds the bump-to-bump pitch/spacing "
+             "axis (IXN rules). Omit for interposer-only checking (identical "
+             "to before this axis existed).",
+    )
+    parser.add_argument(
+        "--list-adapters", action="store_true",
+        help="List the registered adapter ids with their decks and the "
+             "registry that supplied each, then exit.",
     )
     parser.add_argument(
         "--interconnect-methods", type=str, default=None,
@@ -514,6 +604,12 @@ Examples:
 
 
 def main():
+    # --list-adapters is a diagnostic that needs no input layout, so it is
+    # handled before argparse can demand the required --path.
+    if "--list-adapters" in sys.argv[1:]:
+        list_adapters()
+        return 0
+
     args = parse_args()
 
     now_str = datetime.now(timezone.utc).strftime("adk_drc_run_%Y_%m_%d_%H_%M_%S")
@@ -547,14 +643,19 @@ def main():
         )
         sys.exit(1)
 
-    check_klayout_version()
-    layout_path = check_layout_path(args.path)
-    topcell = get_run_top_cell_name(args.topcell, layout_path)
+    # Adapter resolution runs FIRST, before any tooling probe: an adapter
+    # argument that is not a registered id is refused without spawning KLayout
+    # and without touching the input layout. Do not move this below
+    # check_klayout_version(); a security test pins the order.
     adapter_path = resolve_adapter(args.interposer_adapter)
     interconnect_adapter_path = (
         resolve_interconnect_adapter(args.interconnect_adapter)
         if args.interconnect_adapter else None
     )
+
+    check_klayout_version()
+    layout_path = check_layout_path(args.path)
+    topcell = get_run_top_cell_name(args.topcell, layout_path)
     interconnect_methods_path = (
         resolve_ixn_methods_path(args.interconnect_methods)
         if args.interconnect_methods else None
@@ -574,21 +675,33 @@ def main():
             interconnect_adapter_path=interconnect_adapter_path,
             interconnect_methods_path=interconnect_methods_path,
         )
+    except adk_registry.RegistryError as e:
+        # run_assembly_drc's vetted-adapter guard fired. In the CLI this cannot
+        # happen (adapter_path came from resolve_adapter above); it is here so a
+        # future refactor that reordered the two could not turn the guard into
+        # an uncaught traceback. Same exit-code table as resolve_adapter.
+        logging.error("%s", e)
+        return adk_registry.exit_code_for(e)
     except subprocess.CalledProcessError as e:
         # The deck (klayout) exited non-zero: an adapter missing a required
         # input, a deck raise, etc. The KLayout error is already on stderr and
-        # run_assembly_drc logged a one-line banner; exit cleanly with the
-        # deck's code instead of dumping a Python traceback. Exit codes:
-        # 0 = clean, 1 = violations (the normal path below); a deck/tooling
-        # failure surfaces as klayout's own non-zero code (or 2 as a fallback).
-        return e.returncode or 2
+        # run_assembly_drc logged a one-line banner. KLayout exits 1 on a
+        # raise, the same code this runner uses for findings, so the deck's
+        # code is NOT passed through: an engine failure is not a verdict and
+        # must never read as one.
+        logging.error(
+            "ADK DRC engine failure: the deck exited %s before a verdict "
+            "(no findings, no clean result). Exit %d.",
+            e.returncode, EXIT_ENGINE,
+        )
+        return EXIT_ENGINE
 
     violations = check_drc_results(report)
 
     elapsed = time.time() - time_start
     logging.info(f"Total DRC time: {elapsed:.2f}s")
 
-    return 1 if violations else 0
+    return EXIT_FINDINGS if violations else EXIT_CLEAN
 
 
 if __name__ == "__main__":

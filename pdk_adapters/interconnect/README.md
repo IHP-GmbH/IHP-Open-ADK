@@ -31,6 +31,11 @@ before the adapter is eval'd):
 | `IXN_pitch`    | Min centre-to-centre pitch (um)                                |
 | `IXN_pad_size` | Representative pad size (um); used for the pitch-to-space convert |
 
+Each key is set as [the interposer README](../interposer/README.md#optional-rule-overrides)
+describes: one literal `interconnect_rules['NAME'] = NUMBER` per line, above
+any other code in the adapter. The ADK tools refuse any other line naming a
+rule table.
+
 The deck has no native pitch check, so it tests pitch as a spacing of
 `pitch - pad_size`.
 
@@ -50,7 +55,13 @@ its dies' boundaries (`IXN.b.<method>` / `IXN.e.<method>`), plus a conservative
 cross-method spacing between different methods' pads (`IXN.x.<m1>.<m2>`, the
 larger of the two spacings). Pads outside every method region keep the
 assembly-global adapter numbers (`IXN.b.unclaimed` / `IXN.e.unclaimed`) when an
-adapter is also loaded. This mode requires the boundary manifest. See
+adapter is also loaded, and each method is checked against them with the larger
+of the method's and the adapter's spacing (`IXN.x.<method>.unclaimed`; the
+larger-of-two is the deck's compatibility convention for pads under unequal
+rules, not a manufacturing rule from either PDK). Without an adapter those pads
+carry no rule and are reported as `IXN.unassociated`, a coverage finding rather
+than a geometric one, instead of passing unchecked. This mode requires the
+boundary manifest. See
 `../../docs/adapter_contract.md` for the full per-method spec.
 
 ## Shipped adapters

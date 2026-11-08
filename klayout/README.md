@@ -24,17 +24,27 @@ manifest migration; see `config/layers.json` (marked LEGACY).
   `chiplet_boundary`. By default it is populated from the injected boundary
   manifest; in `legacy_exchange0` mode it reads the exchange0 fab layer
   (`config/layers.json`) instead.
-- `drc/rule_decks/8_1_assembly.drc`: the four ASM placement rules (`ASM.a`,
-  `ASM.b`, `ASM.e`, `ASM.f`), expressed over the abstract inputs
-  `chiplet_boundary` and `chiplet_attachment_input`.
+- `drc/rule_decks/wire_bond_pads.drc`: reads the adapter's optional
+  `wire_bond_pad_input` from the carrier only, with every die cell the boundary
+  manifest names pruned by its exact name; refuses when a named die cell is not
+  in the layout.
+- `drc/rule_decks/8_1_assembly.drc`: the ASM placement rules (`ASM.a`,
+  `ASM.b`, `ASM.e`, `ASM.f`, `ASM.g`), expressed over the abstract inputs
+  `chiplet_boundary`, `chiplet_attachment_input` and the wire-bond pads.
+  Without wire-bond pads, `ASM.g` is written as not applicable (a category
+  with no item whose description says so) and `run_drc.py` lists it as not
+  checked.
 - `drc/rule_decks/8_2_interconnect.drc`: the optional interconnect axis,
   appended to the eval chain only when an interconnect adapter and/or a
   per-method file is loaded. Assembly-global mode (adapter only) emits `IXN.b`
   and `IXN.e` over the whole attachment region; per-method mode (an
   `ixn_methods` file) scopes each method to the pads under its dies' boundaries,
   emitting `IXN.b.<method>` / `IXN.e.<method>`, a cross-method spacing check
-  `IXN.x.<m1>.<m2>`, and `IXN.b.unclaimed` / `IXN.e.unclaimed` for pads outside
-  every method region.
+  `IXN.x.<m1>.<m2>`, and, for pads outside every method region,
+  `IXN.b.unclaimed` / `IXN.e.unclaimed` plus a named-vs-unclaimed spacing check
+  `IXN.x.<method>.unclaimed` (both need the adapter's numbers). Without an
+  adapter those unclaimed pads are reported as `IXN.unassociated`, since no
+  rule can be verified for them.
 
 ## Runner
 
@@ -44,6 +54,16 @@ are validated fail-loud before the deck runs, so an assembly with no boundary
 source never passes vacuously.
 
     python klayout/drc/run_drc.py --path design.gds --interposer-adapter intm4tm2
+
+Exit codes: 0 clean, 1 findings, 2 engine failure (the deck aborted or wrote no
+report; never a verdict, the report may be missing or empty). 0 and 1 say what
+they say only for a run that reached the deck and came back with a valid report.
+The paths around the deck keep their own codes: argument validation and the
+input/sidecar preconditions exit 1, adapter and registry resolution errors exit
+before the deck runs with `adk_registry`'s table (1 usage, 5 source, 6 version,
+7 internal), and an unparseable report raises. Exit 1 on its own is therefore not
+a findings verdict. Read the report for the findings, the exit code only says
+which of the three outcomes happened.
 
 Flags:
 

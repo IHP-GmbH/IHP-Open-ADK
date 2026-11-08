@@ -153,12 +153,16 @@ end
 # Eval chain (single eval so all locals are shared across decks)
 #   1. layers_def.drc -- ADK chiplet_boundary layer (from the boundary manifest,
 #                        or the legacy exchange0 fab layer in compat mode)
-#   2. interposer adapter -- declares chiplet_attachment_input; MAY override drc_rules
+#   2. interposer adapter -- declares chiplet_attachment_input; MAY declare
+#                        wire_bond_pad_input; MAY override drc_rules
 #   3. <validation>   -- inline checks that every required interposer input was declared
-#   4. 8_1_assembly.drc -- the four ASM rules
+#   3a. wire_bond_pads.drc -- the adapter's wire-bond pads, read from the
+#                        carrier with every die cell pruned (or ASM.g not
+#                        applicable when the adapter declares none)
 #   -- the following two run ONLY when an interconnect adapter is loaded --
 #   2b. interconnect adapter -- sets interconnect_rules (IXN_*); MAY narrow interconnect_region
 #   3b. <validation>   -- inline checks that every required interconnect key was set
+#   4. 8_1_assembly.drc -- the ASM rules (ASM.a, b, e, f, g)
 #   5. 8_2_interconnect.drc -- the IXN pitch/spacing rules; appended when an
 #      interconnect adapter and/or a per-method file (ixn_methods) is loaded.
 #      With ixn_methods the checks scope per method over the dies' boundary
@@ -166,27 +170,36 @@ end
 #------------------------------------------------------------------------------
 required_inputs = ['chiplet_attachment_input']
 
-adapter_path_literal = $adapter
+# The adapter path is spliced into Ruby source that is eval'd below, so it goes
+# in as an INSPECTED literal (a quoted, escaped Ruby string), never raw: a raw
+# splice would let a path containing a quote or a #{...} inject Ruby through the
+# FILENAME alone, independent of the deck's contents. The path is
+# registry-controlled today; this keeps the splice safe by construction. The
+# rendered message is unchanged for any ordinary path.
+adapter_path_literal = $adapter.inspect
 validation_code = required_inputs.map { |name|
-  "raise \"Interposer adapter (#{adapter_path_literal}) must declare '#{name}'.\" " \
+  "raise \"Interposer adapter (\" + #{adapter_path_literal} + \") must declare '#{name}'.\" " \
   "unless defined?(#{name}) && !#{name}.nil?"
 }.join("\n")
 
-# Build the eval chain. The interposer-only branch is byte-identical to the
-# pre-interconnect deck: [layers_def, adapter, validation, 8_1_assembly]. The
+# Build the eval chain. The interposer-only branch is
+# [layers_def, adapter, validation, wire_bond_pads, 8_1_assembly]. The
 # interconnect adapter, its required-input validation, and 8_2_interconnect.drc
 # are appended ONLY when an interconnect adapter is loaded.
 parts = [
   File.read(File.join(rule_decks_dir, 'layers_def.drc')),
   File.read($adapter),
   validation_code,
+  File.read(File.join(rule_decks_dir, 'wire_bond_pads.drc')),
 ]
 
 if interconnect_adapter
   parts << File.read(interconnect_adapter)
   ixn_required = ['IXN_spacing', 'IXN_pitch', 'IXN_pad_size']
+  # Same rule as the interposer path above: inspected literal, never raw.
+  interconnect_adapter_literal = interconnect_adapter.inspect
   parts << ixn_required.map { |k|
-    "raise \"Interconnect adapter (#{interconnect_adapter}) must set " \
+    "raise \"Interconnect adapter (\" + #{interconnect_adapter_literal} + \") must set " \
     "interconnect_rules['#{k}'].\" unless interconnect_rules.key?('#{k}')"
   }.join("\n")
 end

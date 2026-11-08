@@ -1,12 +1,14 @@
 {
-    "description": "ADK assembly-DRC rule parameter defaults. Consumed by the KLayout deck (klayout/drc/adk_assembly.drc) and the KiCad DRU generator (kicad/dru/generate_assembly_dru.py). Interposer adapters MAY override individual values via Ruby (drc_rules['ASM_b'] = X). v0.2.0 adds the optional interconnect axis (config/interconnect.json); the interposer-only path is unchanged.",
-    "version": "0.2.0",
+    "description": "ADK assembly-DRC rule parameters. Consumed by the KLayout deck (klayout/drc/adk_assembly.drc) and the KiCad DRU generator (kicad/dru/generate_assembly_dru.py). Interposer adapters MAY override individual values via Ruby (drc_rules['ASM_b'] = X); an override is that technology's own rule. v0.3.0 sets ASM_b to 200 um and adds ASM_g, die edge to interposer wire-bond pad, checked only when the interposer adapter declares wire-bond pads.",
+    "version": "0.3.0",
     "rules": {
-        "ASM_b": 50.00,
-        "ASM_e": 10000.00
+        "ASM_b": 200.00,
+        "ASM_e": 10000.00,
+        "ASM_g": 200.00
     },
     "rule_descriptions": {
         "ASM_b": "Minimum spacing between chiplets, in micrometres. Edge-to-edge between adjacent chiplet boundary polygons.",
-        "ASM_e": "Minimum chiplet area, in square micrometres. Chiplet boundary polygons below this threshold are flagged."
+        "ASM_e": "Minimum chiplet area, in square micrometres. Chiplet boundary polygons below this threshold are flagged.",
+        "ASM_g": "Minimum distance from a chiplet boundary to an interposer wire-bond pad, in micrometres. Euclidean, edge to edge; a pad that touches or overlaps a boundary is flagged. Pads are read from the carrier only, never from a die layout."
     }
 }

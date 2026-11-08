@@ -1,0 +1,94 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ihp-open-adk"
+dynamic = ["version"]
+requires-python = ">=3.10"
+# What the suite imports: klayout.db for the deck and pillar checks, jinja2 for
+# the DRU generator, jsonschema for the config schemas, PyYAML for the vendored
+# .chiplet reader. Unpinned here; the ecosystem's pin set constrains them.
+dependencies = ["klayout", "jinja2", "jsonschema", "PyYAML"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+# Nothing is installed as a module: the tests import from the checkout. An
+# explicit empty list turns package discovery off.
+[tool.setuptools]
+packages = []
+
+[tool.setuptools.dynamic]
+version = { file = "VERSION" }
+
+[tool.pytest.ini_options]
+# -ra prints the reason for every skipped test. Most of this suite self-skips
+# without a KLayout CLI, a sibling checkout or a Docker image, so a bare
+# "N passed" says nothing about how much of the run those guards removed. On a
+# bare runner that difference is most of the deck coverage.
+#
+# --strict-markers and --strict-config turn a typo in a marker or an ini key
+# into an error instead of a silently ignored line.
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+testpaths = ["tests"]
+markers = [
+    "klayout_cli: shells `klayout -b`; a host tier deselects it, since its klayout on PATH is a sentinel that reads as a tool start",
+    "openroad_image: runs OpenROAD in the pinned docker image; a host tier deselects it, since its docker on PATH is a sentinel that reads as a tool start",
+]
+
+# The host tier of the tiered runner. A bare pytest, the image and T2 select
+# every case; only this row leaves the two tool markers out.
+[tool.tierrun]
+siblings = []
+select = "not klayout_cli and not openroad_image"
+# chiplet-spec's reference reader at the pin set's revision, so the strict
+# admission cases run instead of skipping.
+install = [{id = "chiplet-spec", subdir = "reference/python", extras = ["strict"]}]
+cpus = 2
+# Files that carry chiplet-spec commits as provenance, not as pins.
+guard-allow = [
+    "CHANGELOG.md",
+    "vendor/README.md",
+    "tests/fixtures/adapter_id_cases.PROVENANCE.txt",
+    "tests/test_chiplet2dbx.py",
+    "tests/test_chiplet_pads.py",
+    "tests/test_config_consistency.py",
+]
+# Each entry is a literal fragment of the skip message and of the node id.
+declared-skips = [
+    # The host tier exports no examples tree, so the demo pin list these
+    # read is nowhere; the image carries it.
+    {reason = "no two_die_interposer example under", nodeid = "tests/test_assembly_admission.py::test_strict_refuses_the_demo_repeated_pad_names", tiers = ["host"]},
+    {reason = "no two_die_interposer example under", nodeid = "tests/test_assembly_admission.py::test_strict_admits_the_same_pads_with_distinct_names_control", tiers = ["host"]},
+    # The LEF generator is found through INTERCONNECT_PDK_ROOT or a parent
+    # walk, never HCDP_ROOT, so a sibling export would not reach it; the image
+    # sets the variable.
+    {reason = "interconnect_pdk sibling checkout not available", nodeid = "tests/test_chiplet2dbx.py::test_macro_naming_matches_generator", tiers = ["host"]},
+    {reason = "interconnect_pdk sibling checkout not available", nodeid = "tests/test_chiplet2dbx.py::test_unknown_manifest_method_fails_loudly", tiers = ["host"]},
+    # The pin oracle resolves vendor/README.md's chiplet-spec commit in a
+    # repository with history; a host tier exports none.
+    {reason = "no chiplet-spec repository at", nodeid = "tests/test_chiplet2dbx.py::test_vendored_reader_matches_spec_reference", tiers = ["host"]},
+    # Gated controls over a corpus and a frozen parser that only an explicit
+    # root names; a skip is not acceptance evidence.
+    {reason = "ADK_RESOLVED_V2_CORPUS_ROOT not set", nodeid = "tests/test_resolved_v2_entry.py::test_corpus_variant[equivalent]", tiers = ["host"]},
+    {reason = "ADK_RESOLVED_V2_CORPUS_ROOT not set", nodeid = "tests/test_resolved_v2_entry.py::test_corpus_variant[narrow_trace]", tiers = ["host"]},
+    {reason = "ADK_RESOLVED_V2_CORPUS_ROOT not set", nodeid = "tests/test_resolved_v2_entry.py::test_corpus_variant[reference]", tiers = ["host"]},
+    {reason = "ADK_RESOLVED_V2_CORPUS_ROOT not set", nodeid = "tests/test_resolved_v2_entry.py::test_corpus_variant[route_cut]", tiers = ["host"]},
+    {reason = "ADK_RESOLVED_V2_FROZEN_PARSER_ROOT not set", nodeid = "tests/test_resolved_v2_entry.py::test_frozen_parser_differential", tiers = ["host"]},
+    # The openroad_image cases need docker and the pinned OpenROAD image; the T2
+    # container has neither by design, so they skip there. A later host lane runs
+    # them. The host tier needs no entry: its select leaves them out. The
+    # klayout_cli cases are not declared anywhere: T2 runs them with the image's
+    # klayout.
+    {reason = "docker or the pinned", nodeid = "tests/test_chiplet2dbx.py::test_live_check_3dblox_synthetic", tiers = ["T2"]},
+    {reason = "docker or the pinned", nodeid = "tests/test_chiplet2dbx.py::test_live_check_3dblox_wire_bond_demo", tiers = ["T2"]},
+    {reason = "docker or the pinned", nodeid = "tests/test_chiplet2dbx.py::test_live_linter_sees_geometry", tiers = ["T2"]},
+    {reason = "docker or the pinned", nodeid = "tests/test_chiplet2dbx.py::test_live_check_3dblox_with_bumps", tiers = ["T2"]},
+    {reason = "docker or the pinned", nodeid = "tests/test_chiplet2dbx.py::test_live_bump_alignment_sees_bumps", tiers = ["T2"]},
+    {reason = "docker or the pinned", nodeid = "tests/test_chiplet2dbx.py::test_live_check_3dblox_demo_with_bumps", tiers = ["T2"]},
+    {reason = "docker or the pinned", nodeid = "tests/test_chiplet2dbx.py::test_live_check_3dblox_with_views", tiers = ["T2"]},
+    {reason = "docker or the pinned", nodeid = "tests/test_chiplet2dbx.py::test_live_views_def_is_read", tiers = ["T2"]},
+    {reason = "docker or the pinned", nodeid = "tests/test_chiplet2dbx.py::test_live_views_bump_moves_a_fixed_pad", tiers = ["T2"]},
+    {reason = "docker or the pinned", nodeid = "tests/test_chiplet2dbx.py::test_live_views_top_is_read", tiers = ["T2"]},
+]

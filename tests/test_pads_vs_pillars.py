@@ -467,6 +467,44 @@ def test_bad_manifest_version_exits_2(tmp_path, capsys):
     assert "version" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("version", pvp.SUPPORTED_PILLAR_MANIFEST_VERSIONS)
+def test_every_supported_manifest_version_loads(tmp_path, version):
+    """Each accepted version must actually load.
+
+    The accepted set is a list of literals, so widening it is a one-line edit
+    that nothing else would notice: without this, narrowing it back would break
+    no test either. 1.1.0 only adds the optional per-method block this check
+    does not read, so both versions have to reach the same verdict.
+    """
+    manifest = write_manifest(tmp_path, [], version=version)
+    assert pvp.load_pillar_manifest(manifest)["version"] == version
+
+    chiplet = write_chiplet(tmp_path, [make_die()])
+    assert run_main(chiplet, manifest) == 0
+
+
+def test_manifest_methods_block_is_ignored_not_rejected(tmp_path):
+    """A 1.1.0 sidecar carrying the methods block still loads.
+
+    The block records the attachment rules the bumps were checked against. This
+    checker does not consume it, and must not start failing on a sidecar that
+    carries it.
+    """
+    manifest = write_manifest(tmp_path, [], version="1.1.0")
+    data = json.loads(manifest.read_text())
+    data["methods"] = {
+        "ihp_cupillar": {
+            "IXN_spacing": 15.0,
+            "IXN_pitch": 50.0,
+            "IXN_pad_size": 35.0,
+        }
+    }
+    manifest.write_text(json.dumps(data, indent=2))
+
+    chiplet = write_chiplet(tmp_path, [make_die()])
+    assert run_main(chiplet, manifest) == 0
+
+
 @pytest.mark.parametrize("mutation", [
     {"schema": "something-else"},
     {"units": "mm"},

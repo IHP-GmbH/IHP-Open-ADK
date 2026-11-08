@@ -104,10 +104,14 @@ import chiplet2dbx  # noqa: E402
 
 import chiplet_format_io as cfio  # noqa: E402
 
-#: Manifest identity: readers pin schema string and EXACT version, mirroring
-#: the boundary-manifest policy (docs/pillar_manifest.md, version policy).
+#: Manifest identity: readers pin the schema string and an EXACT set of
+#: versions, mirroring the boundary-manifest policy (docs/pillar_manifest.md,
+#: version policy). 1.1.0 only ADDS the optional "methods" block (the
+#: per-method attachment rules the pillars were checked against), which this
+#: check does not read, so both versions are accepted rather than forcing a
+#: lockstep upgrade on every consumer of a sidecar it does not use.
 PILLAR_MANIFEST_SCHEMA = "adk-pillar-manifest"
-SUPPORTED_PILLAR_MANIFEST_VERSION = "1.0.0"
+SUPPORTED_PILLAR_MANIFEST_VERSIONS = ("1.0.0", "1.1.0")
 
 #: Only micrometer manifests/assemblies are supported.
 SUPPORTED_UNITS = "um"
@@ -230,14 +234,14 @@ def load_pillar_manifest(path) -> Dict[str, Any]:
             "not an ADK pillar manifest: %s (schema=%r; expected %r). See "
             "docs/pillar_manifest.md."
             % (path, manifest.get("schema"), PILLAR_MANIFEST_SCHEMA))
-    if manifest.get("version") != SUPPORTED_PILLAR_MANIFEST_VERSION:
+    if manifest.get("version") not in SUPPORTED_PILLAR_MANIFEST_VERSIONS:
         raise CheckError(
             "unsupported pillar-manifest version in %s: found %r, this "
-            "checker expects %r. Regenerate the sidecar with a current "
+            "checker expects one of %s. Regenerate the sidecar with a current "
             "hyp_to_gds, or update the ADK. Version policy: "
             "docs/pillar_manifest.md."
             % (path, manifest.get("version"),
-               SUPPORTED_PILLAR_MANIFEST_VERSION))
+               ", ".join(repr(v) for v in SUPPORTED_PILLAR_MANIFEST_VERSIONS)))
     if manifest.get("units") != SUPPORTED_UNITS:
         raise CheckError(
             "pillar manifest %s: units is %r; only %r is supported "

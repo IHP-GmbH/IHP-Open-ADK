@@ -5,6 +5,8 @@ Byte-diff against a golden DRU; coverage of CLI, adapter override parsing,
 and adapter-applied rendering.
 """
 
+import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -17,8 +19,13 @@ GENERATOR = DRU_DIR / "generate_assembly_dru.py"
 GOLDEN = Path(__file__).resolve().parent / "golden" / "assembly_rules.dru.golden"
 
 sys.path.insert(0, str(DRU_DIR))
+if str(ADK_ROOT) not in sys.path:
+    sys.path.insert(0, str(ADK_ROOT))
+
+import adk_registry  # noqa: E402
 from generate_assembly_dru import (  # noqa: E402
-    _format_number,
+    _apply_overrides,
+    _format_mm,
     load_defaults,
     load_interconnect_defaults,
     parse_adapter_overrides,
@@ -71,7 +78,7 @@ def test_stale_adapter_ids_do_not_resolve():
     pre-rename spellings must NOT resolve: no alias map, no fallback."""
     assert resolve_adapter_path("intm4tm2").name == "intm4tm2.drc"
     for stale in ("ihp_intm4tm2", "ihp_sg13g2_interposer"):
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(adk_registry.IdLookupError):
             resolve_adapter_path(stale)
 
 
@@ -81,8 +88,8 @@ def test_adapter_override_is_applied(tmp_path):
     custom = tmp_path / "custom_interposer.drc"
     custom.write_text(
         "# Test adapter with an explicit ASM_b override.\n"
-        "chiplet_attachment_input = polygons(999, 0)\n"
         "drc_rules['ASM_b'] = 30.0\n"
+        "chiplet_attachment_input = polygons(999, 0)\n"
     )
     overrides = parse_adapter_overrides(custom)
     assert overrides == {"ASM_b": 30.0}
@@ -90,19 +97,18 @@ def test_adapter_override_is_applied(tmp_path):
     rules = load_defaults()
     rules.update(overrides)
     rendered = render_assembly_rules(rules, adapter_name="custom_interposer")
-    assert "courtyard_clearance (min 30um)" in rendered
-    assert "courtyard_clearance (min 50um)" not in rendered
+    assert "courtyard_clearance (min 0.03mm)" in rendered
+    assert "courtyard_clearance (min 0.2mm)" not in rendered
     assert "adapter overrides from custom_interposer" in rendered
 
 
-def test_adapter_parser_ignores_commented_overrides(tmp_path):
-    custom = tmp_path / "commented.drc"
-    custom.write_text(
-        "# drc_rules['ASM_b'] = 99.0\n"
-        "drc_rules['ASM_e'] = 5000\n"
-    )
-    overrides = parse_adapter_overrides(custom)
-    assert overrides == {"ASM_e": 5000.0}
+def test_lengths_are_written_in_mm():
+    # KiCad applies no clearance written in um or nm, and says nothing.
+    rules = load_defaults()
+    rules["ASM_b"] = 12.5
+    rendered = render_assembly_rules(rules)
+    assert "courtyard_clearance (min 0.0125mm)" in rendered
+    assert not re.search(r"[0-9](?:um|nm)\)", rendered)
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +128,7 @@ def test_interconnect_adapter_adds_provenance_comment():
     rules = load_defaults()
     rendered = render_assembly_rules(
         rules, interconnect_adapter_name="ihp_cupillar")
-    assert "courtyard_clearance (min 50um)" in rendered
+    assert "courtyard_clearance (min 0.2mm)" in rendered
     assert "Interconnect axis: ihp_cupillar" in rendered
     # IXN rules are post-layout only -> no courtyard constraint emitted for them.
     assert rendered.count("courtyard_clearance") == 1
@@ -144,28 +150,46 @@ def test_interconnect_defaults_load():
 
 
 # ---------------------------------------------------------------------------
-# Override-parser robustness and the fixed-point number filter
+# Override-parser robustness and the mm length formatter
 # ---------------------------------------------------------------------------
 
-def test_format_number_avoids_scientific_notation():
-    # %g would emit '1.5e+06' (unparseable by KiCad); the filter stays decimal
-    # and trims trailing zeros, leaving small integers golden-identical.
-    assert _format_number(50.0) == "50"
-    assert _format_number(30.5) == "30.5"
-    assert _format_number(1500000.0) == "1500000"
+def test_format_mm_refuses_a_length_that_rounds_to_zero():
+    assert _format_mm(200) == "0.2mm"
+    assert _format_mm(0) == "0mm"
+    assert _format_mm(30.5) == "0.0305mm"
+    # %g would write 1e+06, which KiCad cannot read.
+    assert _format_mm(1e9) == "1000000mm"
+    for tiny in (0.0004, -0.0004):
+        with pytest.raises(ValueError, match="rounds to 0"):
+            _format_mm(tiny)
+    for bad in (float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="not a length"):
+            _format_mm(bad)
 
 
-def test_override_ignores_non_literal_rhs(tmp_path):
-    # Per the documented 'only literal numeric overrides' scope, a non-literal
-    # RHS must be IGNORED, never truncated to a misleading partial number.
-    adapter = tmp_path / "weird.drc"
-    adapter.write_text(
+def test_main_refuses_an_adapter_it_cannot_read(tmp_path):
+    # The deck evals the adapter, so the generator refuses (exit 1, every line
+    # named) rather than emit a default the deck would not apply.
+    reg_dir = tmp_path / "registry"
+    reg_dir.mkdir()
+    (reg_dir / "weird.drc").write_text(
         "drc_rules['ASM_b'] = 30.0e3\n"      # scientific notation
         "drc_rules['ASM_e'] = 1_000\n"       # ruby underscore grouping
         "drc_rules['ASM_b'] = 30.0 + foo\n"  # computed expression
         "drc_rules['asm_b'] = 25.0\n"        # lowercase: schema-invalid key
     )
-    assert parse_adapter_overrides(adapter) == {}
+    (reg_dir / "registry.json").write_text(json.dumps({
+        "schema": "adk-registry", "version": "1.0",
+        "adapters": {"weird_overrides": "weird.drc"}}))
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path),
+           "ADK_REGISTRY_DIR": str(reg_dir), "XDG_CONFIG_HOME": str(tmp_path / "xdg")}
+    proc = subprocess.run(
+        [sys.executable, str(GENERATOR), "--interposer-adapter", "weird_overrides"],
+        capture_output=True, text=True, env=env, timeout=120)
+    assert proc.returncode == 1, proc.stderr
+    assert proc.stderr.startswith("error:")
+    for n in (1, 2, 3, 4):
+        assert f"line {n} (" in proc.stderr
 
 
 def test_override_literal_with_comment_parsed(tmp_path):
@@ -174,24 +198,49 @@ def test_override_literal_with_comment_parsed(tmp_path):
     assert parse_adapter_overrides(adapter) == {"ASM_b": 40.0}
 
 
-def test_main_rejects_unknown_override_key(tmp_path):
+# The value checks below go through the parse API: what is under test is the
+# check itself, which is independent of how the adapter was selected. A tmp
+# adapter reaches the CLI only through a registry layer (ADK_REGISTRY_DIR), as
+# in test_main_refuses_an_adapter_it_cannot_read.
+
+def test_unknown_override_key_is_rejected(tmp_path):
     adapter = tmp_path / "bad_key.drc"
     adapter.write_text("drc_rules['ASM_z'] = 10.0\n")
-    proc = subprocess.run(
-        [sys.executable, str(GENERATOR), "--interposer-adapter", str(adapter)],
-        capture_output=True, text=True)
-    assert proc.returncode == 1
-    assert "unknown rule key" in proc.stderr and "ASM_z" in proc.stderr
+    with pytest.raises(ValueError) as exc:
+        _apply_overrides(load_defaults(), parse_adapter_overrides(adapter),
+                         adapter, "Interposer")
+    assert "unknown rule key" in str(exc.value) and "ASM_z" in str(exc.value)
 
 
-def test_main_rejects_negative_override(tmp_path):
+def test_negative_override_is_rejected(tmp_path):
     adapter = tmp_path / "neg.drc"
     adapter.write_text("drc_rules['ASM_b'] = -50\n")
+    with pytest.raises(ValueError) as exc:
+        _apply_overrides(load_defaults(), parse_adapter_overrides(adapter),
+                         adapter, "Interposer")
+    assert "non-negative" in str(exc.value)
+
+
+def test_negative_interconnect_override_is_rejected(tmp_path):
+    adapter = tmp_path / "neg_ixn.drc"
+    adapter.write_text("interconnect_rules['IXN_pitch'] = -75\n")
+    with pytest.raises(ValueError) as exc:
+        _apply_overrides(load_interconnect_defaults(),
+                         parse_interconnect_overrides(adapter),
+                         adapter, "Interconnect")
+    assert "non-negative" in str(exc.value)
+
+
+def test_main_rejects_unregistered_adapter_id(tmp_path):
+    """A regex-valid but unregistered id is exit 1 with a clean message."""
     proc = subprocess.run(
-        [sys.executable, str(GENERATOR), "--interposer-adapter", str(adapter)],
+        [sys.executable, str(GENERATOR),
+         "--interposer-adapter", "definitely_not_registered"],
         capture_output=True, text=True)
     assert proc.returncode == 1
-    assert "non-negative" in proc.stderr
+    assert "unknown adapter id" in proc.stderr
+    # The CLI refusal for the removed PATH form lives in
+    # tests/test_adapter_id_only.py (the security acceptance module).
 
 
 def test_main_missing_rule_params_clean_error(tmp_path):

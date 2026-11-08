@@ -45,3 +45,26 @@ logger.info('ADK: ASM.f')
 asm_f = chiplet_attachment_input.overlapping(chiplet_boundary).not_inside(chiplet_boundary)
 asm_f.output('ASM.f', 'ASM.f : Chiplet-attachment geometry overlapping a chiplet must be fully inside it')
 asm_f.forget
+
+# Rule ASM.g -- minimum distance from a chiplet boundary to an interposer
+# wire-bond pad. Euclidean, edge to edge; a pad that touches or overlaps a
+# boundary is flagged too (separation sees only facing outside edges). The
+# pads come from wire_bond_pads.drc, carrier only. With no pads declared the
+# rule is not applicable: its category is written with no item and a
+# description that says so, which a reader must not take for a pass.
+logger.info('ADK: ASM.g')
+raise "ADK rule parameters have no 'ASM_g'" unless drc_rules.key?('ASM_g')
+asm_g_value = drc_rules['ASM_g'].to_f
+if wire_bond_pads
+  logger.info("ADK: ASM.g #{wire_bond_pads.count} pads checked")
+  asm_g_message = "ASM.g : Min. die edge to wire-bond pad distance is #{asm_g_value} um"
+  asm_g = wire_bond_pads.separation(chiplet_boundary, asm_g_value.um, euclidian)
+  asm_g.output('ASM.g', asm_g_message)
+  asm_g.forget
+  asm_g_touch = wire_bond_pads.interacting(chiplet_boundary)
+  asm_g_touch.output('ASM.g', asm_g_message)
+  asm_g_touch.forget
+else
+  logger.info("ADK: ASM.g not applicable: #{asm_g_not_applicable}")
+  polygon_layer.output('ASM.g', "ASM.g : not applicable: #{asm_g_not_applicable}")
+end

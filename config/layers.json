@@ -1,6 +1,6 @@
 {
     "description": "ADK layer registry (LEGACY). The chiplet boundary is no longer bound to a fabrication layer: it is carried by the per-assembly boundary manifest (config/schema/boundary_manifest.schema.json), outside any PDK namespace. The entries below are legacy-compat only, read by the assembly DRC's --legacy-exchange0 path for pre-migration GDS.",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "layers": {
         "exchange0": {
             "gds_layer": 190,

@@ -7,6 +7,7 @@ synthetic adapter at tests/fixtures/test_interposer_adapter.drc.
 """
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -22,30 +23,34 @@ RUNNER = ADK_ROOT / "klayout" / "drc" / "run_drc.py"
 # The runner shells `klayout -b` for the deck itself; on a bare checkout
 # without the KLayout binary (e.g. a CI runner) the whole module skips.
 # The in-image verify gate has the binary and runs everything.
-pytestmark = pytest.mark.skipif(
-    shutil.which("klayout") is None,
-    reason="klayout CLI not on PATH (runner shells `klayout -b`)")
+pytestmark = [
+    pytest.mark.klayout_cli,
+    pytest.mark.skipif(
+        shutil.which("klayout") is None,
+        reason="klayout CLI not on PATH (runner shells `klayout -b`)"),
+]
 
 
-def _run(layout: Path, adapter: Path, run_dir: Path,
-         report: Path, legacy: bool = False) -> subprocess.CompletedProcess:
+def _run(layout: Path, adapter_id: str, run_dir: Path,
+         report: Path, legacy: bool = False,
+         env: dict = None) -> subprocess.CompletedProcess:
     cmd = [
         sys.executable, str(RUNNER),
         "--path", str(layout),
-        "--interposer-adapter", str(adapter),
+        "--interposer-adapter", adapter_id,
         "--run_dir", str(run_dir),
         "--report", str(report),
     ]
     if legacy:
         cmd.append("--legacy-exchange0")
-    return subprocess.run(cmd, capture_output=True, text=True)
+    return subprocess.run(cmd, capture_output=True, text=True, env=env)
 
 
-def _violations(layout: Path, adapter: Path, run_dir: Path,
+def _violations(layout: Path, adapter_id: str, run_dir: Path,
                 legacy: bool = False) -> set:
     run_dir = Path(run_dir)
     report = run_dir / "report.lyrdb"
-    proc = _run(layout, adapter, run_dir, report, legacy=legacy)
+    proc = _run(layout, adapter_id, run_dir, report, legacy=legacy)
     assert report.is_file(), (
         f"Report not generated: {report}\n"
         f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
@@ -107,14 +112,29 @@ def test_assembly_pad_outside_triggers_asm_f(fixture_layouts, test_adapter, tmp_
 def test_runner_aborts_when_adapter_missing_required_input(
         fixture_layouts, tmp_path):
     """An adapter that does NOT declare chiplet_attachment_input must cause
-    the runner to exit non-zero with an error naming the missing input."""
+    the runner to exit non-zero with an error naming the missing input.
+
+    The broken deck reaches the runner the only way an unshipped deck can: by
+    being REGISTERED in an operator registry layer (the documented migration
+    route for the removed path form), never by being named as a path.
+    """
     bad_adapter = tmp_path / "broken_adapter.drc"
     bad_adapter.write_text(
         "# Deliberately broken adapter: declares the wrong name.\n"
         "wrong_name = polygons(999, 0)\n"
     )
+    layer_dir = tmp_path / "registry_layer"
+    layer_dir.mkdir()
+    (layer_dir / "registry.json").write_text(json.dumps({
+        "schema": "adk-registry",
+        "version": "1.0",
+        "adapters": {"broken_test_adapter": str(bad_adapter)},
+    }))
+    env = dict(os.environ, ADK_REGISTRY_DIR=str(layer_dir))
+
     report = tmp_path / "report.lyrdb"
-    proc = _run(fixture_layouts["assembly_ok"], bad_adapter, tmp_path, report)
+    proc = _run(fixture_layouts["assembly_ok"], "broken_test_adapter",
+                tmp_path, report, env=env)
     assert proc.returncode != 0, (
         "Runner must abort when adapter is missing required input.\n"
         f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
@@ -269,5 +289,81 @@ def test_interposer_adapter_id_resolves_plain_only():
     assert resolved.endswith("intm4tm2.drc")
     assert Path(resolved).is_file()
     for stale in ("ihp_intm4tm2", "ihp_sg13g2_interposer"):
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit) as exc:
             resolve_adapter(stale)
+        assert exc.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# ASM.g: die edge to interposer wire-bond pad. The wire-bond adapter declares
+# pads on 998/0; the fixtures lay dies out as the exporter does (one cell per
+# manifest record), so the deck must read the carrier's pads and never a die's.
+# ---------------------------------------------------------------------------
+
+def _categories(report: Path) -> dict:
+    import xml.etree.ElementTree as ET
+    root = ET.parse(report).getroot()
+    return {(c.findtext("name") or "").strip(): (c.findtext("description") or "").strip()
+            for c in root.findall("categories/category")}
+
+
+@pytest.mark.parametrize("name, expected", [
+    ("wire_bond_ok", set()),
+    ("wire_bond_too_close", {"ASM.g"}),
+    ("wire_bond_diagonal", set()),
+    ("wire_bond_under_die", {"ASM.g"}),
+    ("wire_bond_die_own_pads", set()),
+    ("wire_bond_flipped", set()),
+    ("wire_bond_subcell", {"ASM.g"}),
+    ("wire_bond_shared_cell", set()),
+])
+def test_asm_g(fixture_layouts, wire_bond_adapter, tmp_path, name, expected):
+    violations = _violations(fixture_layouts[name], wire_bond_adapter, tmp_path)
+    assert violations == expected, f"{name}: got {sorted(violations)}"
+
+
+def test_asm_g_counts_carrier_pads_only(fixture_layouts, wire_bond_adapter, tmp_path):
+    """The die's own two pads are pruned; the one carrier pad is checked."""
+    report = tmp_path / "report.lyrdb"
+    proc = _run(fixture_layouts["wire_bond_die_own_pads"], wire_bond_adapter,
+                tmp_path, report)
+    combined = proc.stdout + proc.stderr
+    assert proc.returncode == 0, combined
+    assert "ASM.g 1 pads checked" in combined, combined
+    assert "1 die cells excluded" in combined, combined
+
+
+def test_asm_g_refuses_a_die_cell_the_layout_lacks(
+        fixture_layouts, wire_bond_adapter, tmp_path):
+    """A record whose die cell is not in the layout stops the deck: reading
+    pads without excluding that die would read the die's own pads."""
+    report = tmp_path / "report.lyrdb"
+    proc = _run(fixture_layouts["wire_bond_unnamed_die"], wire_bond_adapter,
+                tmp_path, report)
+    combined = proc.stdout + proc.stderr
+    assert proc.returncode == 2, combined
+    assert '"U1_TEST"' in combined and "not in the layout" in combined, combined
+
+
+def test_asm_g_not_applicable_without_wire_bond_pads(
+        fixture_layouts, test_adapter, tmp_path):
+    """An adapter that declares no wire-bond pads: ASM.g is written as a
+    category with no item that says it is not applicable, and the runner lists
+    it apart from the passed rules."""
+    report = tmp_path / "report.lyrdb"
+    proc = _run(fixture_layouts["assembly_ok"], test_adapter, tmp_path, report)
+    combined = proc.stdout + proc.stderr
+    assert proc.returncode == 0, combined
+    assert get_rules_with_violations(report) == set()
+    assert _categories(report)["ASM.g"] == (
+        "ASM.g : not applicable: the interposer adapter declares no wire-bond pads")
+    assert ("ADK DRC not checked: ASM.g (the interposer adapter declares no "
+            "wire-bond pads)") in combined, combined
+
+
+def test_asm_g_checked_category_says_its_value(fixture_layouts, wire_bond_adapter, tmp_path):
+    report = tmp_path / "report.lyrdb"
+    proc = _run(fixture_layouts["wire_bond_ok"], wire_bond_adapter, tmp_path, report)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert _categories(report)["ASM.g"] == (
+        "ASM.g : Min. die edge to wire-bond pad distance is 200.0 um")

@@ -7,8 +7,9 @@ numeric overrides parsed from an adapter .drc file, and renders the assembly
 DRU section to stdout or to a file.
 
 Scope: the only KLayout rule with a clean KiCad DRU mapping is ASM.b
-(courtyard_clearance). ASM.a is covered by KiCad's native courtyard collision
-check; ASM.e/ASM.f are post-layout only (see template header).
+(courtyard_clearance between die footprints). ASM.a is covered by KiCad's
+native courtyard collision check; ASM.e/ASM.f/ASM.g are post-layout only (see
+template header).
 
 The render_assembly_rules() function is the entry point for downstream
 generators (e.g. an interposer PDK's KiCad DRU generator that wants to append
@@ -17,59 +18,64 @@ ADK rules to its own metal/via output).
 
 import argparse
 import json
-import re
+import math
 import sys
 from pathlib import Path
-from typing import Dict, Optional, Pattern
+from typing import Dict, Optional
 
 import jinja2
 
 ADK_ROOT = Path(__file__).resolve().parents[2]
-RULE_PARAMS_JSON = ADK_ROOT / "config" / "rule_params.json"
+
+# The ADK root holds adk_registry, the single anchored id->location resolver,
+# and adk_rule_params, the rule table and override parsers. Bootstrap it onto
+# sys.path so this generator works when invoked by absolute path (the normal
+# case) as well as when imported by a downstream generator.
+if str(ADK_ROOT) not in sys.path:
+    sys.path.insert(0, str(ADK_ROOT))
+
+import adk_registry  # noqa: E402
+from adk_rule_params import (  # noqa: E402
+    RULE_PARAMS_RELPATH,
+    parse_adapter_overrides,
+    parse_interconnect_overrides,
+    read_rule_table,
+)
+
+RULE_PARAMS_JSON = ADK_ROOT / RULE_PARAMS_RELPATH
 INTERCONNECT_JSON = ADK_ROOT / "config" / "interconnect.json"
-ADAPTER_DIR = ADK_ROOT / "pdk_adapters" / "interposer"
-INTERCONNECT_ADAPTER_DIR = ADK_ROOT / "pdk_adapters" / "interconnect"
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 TEMPLATE_NAME = "assembly_rules.dru.jinja"
 
-# Adapter override pattern: drc_rules['NAME'] = NUMBER
-# The rule NAME matches the config schema (^[A-Z][A-Za-z0-9_]*$). The value
-# must be a COMPLETE numeric literal: the trailing `\s*(?:#.*)?$` rejects a
-# partial match on a non-literal RHS (scientific notation 30.0e3, Ruby
-# underscore grouping 1_000, unit suffixes 30um, or computed expressions
-# `30.0 + foo`). Such lines do not match and are silently ignored per the
-# documented "only literal numeric overrides" scope -- never truncated to a
-# misleading partial number. An optional trailing `# comment` is allowed.
-_OVERRIDE_RE = re.compile(
-    r"^\s*drc_rules\[\s*['\"](?P<name>[A-Z][A-Za-z0-9_]*)['\"]\s*\]\s*=\s*"
-    r"(?P<value>-?\d+(?:\.\d+)?)\s*(?:#.*)?$"
-)
-
-# Same shape as _OVERRIDE_RE but for interconnect adapters' interconnect_rules[].
-_INTERCONNECT_OVERRIDE_RE = re.compile(
-    r"^\s*interconnect_rules\[\s*['\"](?P<name>[A-Z][A-Za-z0-9_]*)['\"]\s*\]\s*=\s*"
-    r"(?P<value>-?\d+(?:\.\d+)?)\s*(?:#.*)?$"
-)
-
 
 def _format_number(value: float) -> str:
-    """Render a rule value as a fixed-point decimal with no scientific notation
-    and no trailing zeros: 50.0 -> '50', 30.5 -> '30.5'. Python's '%g' switches
-    to scientific notation for magnitudes >= 1e6 (e.g. '1.5e+06'), which KiCad's
-    DRU length-literal parser cannot read; this keeps the output decimal for any
-    magnitude while leaving small integers byte-identical to the old '%g'."""
+    """Render a number as a fixed-point decimal, to 6 places, with no
+    scientific notation and no trailing zeros: 50.0 -> '50', 30.5 -> '30.5',
+    1.5e6 -> '1500000'. KiCad's DRU length-literal parser cannot read
+    scientific notation."""
     s = format(float(value), "f")
     if "." in s:
         s = s.rstrip("0").rstrip(".")
     return s
 
 
+def _format_mm(value_um: float) -> str:
+    """Render a length given in um as a KiCad DRU literal in mm: 200 ->
+    '0.2mm'. KiCad (9.99 in the ADK image) applies no clearance written in um
+    or nm and reports no error, so every length goes out in mm, to 1 nm. A
+    nonzero length that rounds to 0 is refused rather than written as no
+    clearance."""
+    if not math.isfinite(value_um):
+        raise ValueError(f"{value_um} um is not a length")
+    mm = _format_number(value_um / 1000.0)
+    if value_um and mm in ("0", "-0"):
+        raise ValueError(f"{value_um} um rounds to 0 at the 1 nm DRU resolution")
+    return mm + "mm"
+
+
 def load_defaults(path: Path = RULE_PARAMS_JSON) -> Dict[str, float]:
-    """Load ADK rule defaults from the JSON registry."""
-    data = json.loads(path.read_text())
-    if "rules" not in data:
-        raise ValueError(f"{path}: missing required 'rules' key.")
-    return {name: float(value) for name, value in data["rules"].items()}
+    """Load ADK rule defaults from the JSON registry (see adk_rule_params)."""
+    return read_rule_table(path)
 
 
 def load_interconnect_defaults(path: Path = INTERCONNECT_JSON) -> Dict[str, float]:
@@ -78,33 +84,6 @@ def load_interconnect_defaults(path: Path = INTERCONNECT_JSON) -> Dict[str, floa
         return {}
     return {name: float(value)
             for name, value in json.loads(path.read_text()).get("rules", {}).items()}
-
-
-def _parse_overrides(adapter_path: Path, pattern: Pattern) -> Dict[str, float]:
-    """Extract numeric ``...rules['NAME'] = NUMBER`` overrides from a .drc adapter.
-
-    Only complete numeric literals are recognised (see the regex). Anything more
-    complex (Ruby expressions, computed values, non-numeric RHS) does not match
-    and is silently ignored. Comment lines starting with '#' are skipped.
-    """
-    overrides: Dict[str, float] = {}
-    for line in adapter_path.read_text().splitlines():
-        if line.lstrip().startswith("#"):
-            continue
-        m = pattern.match(line)
-        if m:
-            overrides[m.group("name")] = float(m.group("value"))
-    return overrides
-
-
-def parse_adapter_overrides(adapter_path: Path) -> Dict[str, float]:
-    """Extract numeric drc_rules[] overrides from a .drc interposer adapter."""
-    return _parse_overrides(adapter_path, _OVERRIDE_RE)
-
-
-def parse_interconnect_overrides(adapter_path: Path) -> Dict[str, float]:
-    """Extract numeric interconnect_rules[] overrides from an interconnect adapter."""
-    return _parse_overrides(adapter_path, _INTERCONNECT_OVERRIDE_RE)
 
 
 def _apply_overrides(base: Dict[str, float], overrides: Dict[str, float],
@@ -130,29 +109,23 @@ def _apply_overrides(base: Dict[str, float], overrides: Dict[str, float],
     base.update(overrides)
 
 
-def _resolve_adapter_path(name_or_path: str, search_dir: Path, kind: str) -> Path:
-    """Resolve a shortname (e.g. 'intm4tm2') or a .drc path against ``search_dir``."""
-    candidate = Path(name_or_path)
-    if candidate.suffix == ".drc" and candidate.is_file():
-        return candidate.resolve()
-    shortname = name_or_path[:-4] if name_or_path.endswith(".drc") else name_or_path
-    candidate = search_dir / f"{shortname}.drc"
-    if candidate.is_file():
-        return candidate.resolve()
-    raise FileNotFoundError(
-        f"{kind} adapter not found: '{name_or_path}'. "
-        f"Looked for the literal path and for '{search_dir / (shortname + '.drc')}'."
-    )
+# Adapter selection is code selection (the same file the KLayout deck EVALs),
+# so the argument is a registry id and nothing else: no directory join, no
+# CWD-relative path, no ".drc" branch. Neither resolver builds a Path from its
+# argument, so the returned path is by construction one of the vetted registry
+# values. Do not reintroduce a search directory here.
 
 
-def resolve_adapter_path(name_or_path: str) -> Path:
-    """Resolve an interposer adapter shortname (e.g. 'intm4tm2') or a .drc path."""
-    return _resolve_adapter_path(name_or_path, ADAPTER_DIR, "Interposer")
+def resolve_adapter_path(adapter_id: str) -> Path:
+    """Resolve an interposer adapter registry id to its vetted .drc path."""
+    adk_registry.validate_adapter_id(adapter_id, "interposer adapter")
+    return adk_registry.resolve_adapter(adapter_id).value
 
 
-def resolve_interconnect_adapter_path(name_or_path: str) -> Path:
-    """Resolve an interconnect adapter shortname or .drc path."""
-    return _resolve_adapter_path(name_or_path, INTERCONNECT_ADAPTER_DIR, "Interconnect")
+def resolve_interconnect_adapter_path(adapter_id: str) -> Path:
+    """Resolve an interconnect adapter registry id to its vetted .drc path."""
+    adk_registry.validate_adapter_id(adapter_id, "interconnect adapter")
+    return adk_registry.resolve_adapter(adapter_id).value
 
 
 def render_assembly_rules(rules: Dict[str, float],
@@ -175,7 +148,7 @@ def render_assembly_rules(rules: Dict[str, float],
         keep_trailing_newline=True,
         undefined=jinja2.StrictUndefined,
     )
-    env.filters["num"] = _format_number
+    env.filters["mm"] = _format_mm
     template = env.get_template(TEMPLATE_NAME)
     return template.render(
         rules=rules,
@@ -191,27 +164,32 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s                                              # defaults, stdout
-  %(prog)s --interposer-adapter intm4tm2    # adapter overrides
-  %(prog)s --out assembly.kicad_dru                      # write to file
+  %(prog)s                                   # defaults, stdout
+  %(prog)s --interposer-adapter intm4tm2     # adapter overrides
+  %(prog)s --out adk_section.txt             # write the section to a file
+
+The output is a section for a project's .kicad_dru, which starts with a
+(version 1) line; KiCad ignores a rules file without one, silently.
 """,
     )
     parser.add_argument(
         "--interposer-adapter", default=None,
-        help="Interposer adapter shortname or .drc path. Numeric "
-             "drc_rules[] overrides in the adapter are merged on top of "
-             "config/rule_params.json defaults.",
+        help="Interposer adapter: a registry id (see "
+             "docs/adapter_contract.md); resolved through the ADK registry "
+             "only. A path is refused. Numeric drc_rules[] overrides in the "
+             "adapter are merged on top of config/rule_params.json defaults.",
     )
     parser.add_argument(
         "--interconnect-adapter", default=None,
-        help="Optional interconnect adapter shortname or .drc path. Adds a "
-             "provenance comment for the bump pitch/spacing axis (IXN rules, "
-             "post-layout only). Omit for interposer-only output (identical to "
-             "before this axis existed).",
+        help="Optional interconnect adapter: a registry id (see "
+             "docs/adapter_contract.md); resolved through the ADK registry "
+             "only. A path is refused. Adds a provenance comment for the bump "
+             "pitch/spacing axis (IXN rules, post-layout only). Omit for "
+             "interposer-only output (identical to before this axis existed).",
     )
     parser.add_argument(
         "--out", default=None,
-        help="Output path. If omitted, write to stdout.",
+        help="Output path for the section. If omitted, write to stdout.",
     )
     parser.add_argument(
         "--rule-params", default=None,
@@ -259,6 +237,13 @@ def main():
             Path(args.out).write_text(rendered)
         else:
             sys.stdout.write(rendered)
+    # The registry failures come first and keep their own exit codes: an
+    # unknown/malformed adapter id (or a path where an id belongs) is 1, an
+    # unusable registry is 5, an unreadable registry major is 6. Without this
+    # they would escape the tuple below as an uncaught traceback.
+    except adk_registry.RegistryError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return adk_registry.exit_code_for(e)
     except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError,
             jinja2.TemplateError) as e:
         print(f"error: {e}", file=sys.stderr)

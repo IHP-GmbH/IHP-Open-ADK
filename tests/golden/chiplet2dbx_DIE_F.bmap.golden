@@ -1,0 +1,4 @@
+# Bump map for ChipletDef DIE_F from its eda-views record at corner typ; derived from views_demo.chiplet by chiplet2dbx (ADK).
+# bumpInstName bumpCellType x y portName netName  (x/y = pad center, DEF frame um)
+PAD_A PADX 15 25 a a
+PAD_V PADX 75 55 - -
