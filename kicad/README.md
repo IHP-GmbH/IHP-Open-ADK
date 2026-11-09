@@ -3,10 +3,12 @@
 Generate the ADK assembly DRU section so it can be dropped into a KiCad
 project's `.kicad_dru` file. The output mirrors the ADK KLayout deck: the
 only assembly rule with a clean KiCad mapping is `ASM.b` (chiplet-to-chiplet
-spacing, emitted as a `courtyard_clearance` constraint). `ASM.a` is left to
-KiCad's native courtyard collision check, and `ASM.e`/`ASM.f` (plus the
+spacing, emitted as a `courtyard_clearance` constraint between die
+footprints, the ones with a `GDS_FILE` field). `ASM.a` is left to KiCad's
+native courtyard collision check, and `ASM.e`/`ASM.f`/`ASM.g` (plus the
 optional interconnect `IXN.*` rules) are post-layout only and enforced by the
-KLayout deck, not here.
+KLayout deck, not here. `ASM.g` (die edge to wire-bond pad) would need a
+courtyard on the pad footprint, which the flow's pad footprints do not carry.
 
 ## Usage
 
@@ -14,8 +16,8 @@ KLayout deck, not here.
 # Defaults from config/rule_params.json, written to stdout
 python dru/generate_assembly_dru.py
 
-# Merge per-interposer overrides, then write to a file
-python dru/generate_assembly_dru.py --interposer-adapter intm4tm2 --out assembly.kicad_dru
+# Merge per-interposer overrides, then write the section to a file
+python dru/generate_assembly_dru.py --interposer-adapter intm4tm2 --out adk_section.txt
 
 # Add an interconnect-axis provenance block (bump pitch/spacing)
 python dru/generate_assembly_dru.py --interconnect-adapter ihp_cupillar
@@ -23,14 +25,13 @@ python dru/generate_assembly_dru.py --interconnect-adapter ihp_cupillar
 
 CLI flags:
 
-- `--interposer-adapter <name|.drc>`: merge numeric `drc_rules[...]` overrides
-  from an interposer adapter on top of the defaults. Resolves a shortname
-  against `../pdk_adapters/interposer/` or a literal `.drc` path.
-- `--interconnect-adapter <name|.drc>`: add an interconnect-axis (`IXN.*`)
-  provenance comment. Resolves against `../pdk_adapters/interconnect/`. Omit
-  for interposer-only output, which is byte-identical to before this axis
-  existed.
-- `--out <path>`: write to a file instead of stdout.
+- `--interposer-adapter <id>`: merge numeric `drc_rules[...]` overrides from
+  an interposer adapter on top of the defaults. The id resolves through the
+  ADK registry only; a path is refused.
+- `--interconnect-adapter <id>`: add an interconnect-axis (`IXN.*`)
+  provenance comment. Resolved the same way. Omit for interposer-only
+  output, which is byte-identical to before this axis existed.
+- `--out <path>`: write the section to a file instead of stdout.
 - `--rule-params <path>`: use an alternate `rule_params.json`
   (default: `../config/rule_params.json`).
 
@@ -44,6 +45,12 @@ from adk.kicad.dru.generate_assembly_dru import render_assembly_rules, load_defa
 
 section = render_assembly_rules(load_defaults())
 ```
+
+The section has no `(version 1)` header, so it goes below the one the
+project's `.kicad_dru` opens with; KiCad ignores a rules file without it and
+says nothing. A template passed through `template_dir` must write lengths
+with the `mm` filter: KiCad applies no clearance written in `um` or `nm`, and
+nothing checks the template for it.
 
 The signature is append-only, so existing importers stay source-compatible:
 

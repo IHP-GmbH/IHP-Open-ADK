@@ -29,9 +29,12 @@ RUNNER = ADK_ROOT / "klayout" / "drc" / "run_drc.py"
 # The runner shells `klayout -b` for the deck itself; on a bare checkout
 # without the KLayout binary (e.g. a CI runner) the whole module skips.
 # The in-image verify gate has the binary and runs everything.
-pytestmark = pytest.mark.skipif(
-    shutil.which("klayout") is None,
-    reason="klayout CLI not on PATH (runner shells `klayout -b`)")
+pytestmark = [
+    pytest.mark.klayout_cli,
+    pytest.mark.skipif(
+        shutil.which("klayout") is None,
+        reason="klayout CLI not on PATH (runner shells `klayout -b`)"),
+]
 # Adapters are named by registry id only; tests/fixtures/registry.json (wired
 # in by conftest's session registry_layer fixture) declares this one.
 TEST_ADAPTER_ID = "test_interposer"
@@ -100,6 +103,27 @@ def _violations(layout, run_dir, interconnect_adapter=None,
         f"No report generated.\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     )
     return get_rules_with_violations(report)
+
+
+def _checked(layout, run_dir, expect_exit, interconnect_adapter=None,
+             interconnect_methods=None):
+    """Run the runner and require its NATIVE exit: 1 when a finding is
+    expected, 0 when the run must be clean. Unlike _violations, a crashed or
+    aborted run (any other exit, or no report) fails HERE instead of reading
+    as 'no violations' from a missing or partial report, and the exit must
+    agree with the report's items (exit 1 iff some rule has items)."""
+    report = Path(run_dir) / "report.lyrdb"
+    proc = _run(layout, run_dir, report, interconnect_adapter,
+                interconnect_methods)
+    assert proc.returncode == expect_exit, (
+        f"exit {proc.returncode}, expected {expect_exit}\n"
+        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+    assert report.is_file(), (
+        f"No report generated.\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+    rules = get_rules_with_violations(report)
+    assert bool(rules) == (expect_exit == 1), (
+        f"exit {proc.returncode} disagrees with the report items: {sorted(rules)}")
+    return rules
 
 
 def test_no_interconnect_adapter_runs_no_ixn(tmp_path):
@@ -324,3 +348,163 @@ def test_per_method_pitch_not_exceeding_pad_aborts(tmp_path):
     proc = _run(gds, tmp_path / "run", report, interconnect_methods=methods)
     assert proc.returncode != 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     assert "must exceed" in (proc.stdout + proc.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Named-vs-unclaimed pair coverage. IXN.b.<mid> sees only its own
+# method's pads and IXN.b.unclaimed only unclaimed-vs-unclaimed, so a claimed
+# pad too close to an unclaimed one was checked by nothing and signed off
+# clean in per-method mode (a physical false clean). The deck now checks each
+# named method against the unclaimed pads with the stricter of the method's
+# and the adapter's spacing, and reports unclaimed pads as IXN.unassociated
+# when no adapter defines their rule.
+# ---------------------------------------------------------------------------
+
+def _claimed_unclaimed_gds(out: Path, unclaimed_x0: float, method_rules):
+    """One 35x35 pad entirely inside U1 (claimed by the method), one 35x35 pad
+    entirely outside every boundary (unclaimed) whose left edge is at
+    unclaimed_x0. U1 spans x 0..500; the claimed pad ends at x=495, so the
+    edge gap is unclaimed_x0 - 495. Mirrors the audit's pair_coverage cases."""
+    ly = kdb.Layout()
+    ly.dbu = 0.001
+    top = ly.create_cell("TOP")
+    pad = ly.layer(*ATTACHMENT_LAYER)
+    top.shapes(pad).insert(kdb.Box(_um(460), _um(100), _um(495), _um(135)))
+    top.shapes(pad).insert(kdb.Box(_um(unclaimed_x0), _um(100),
+                                   _um(unclaimed_x0 + 35), _um(135)))
+    ly.write(str(out))
+    return _write_sidecars(out, [_boundary("U1", 0, 0, 500, 500)],
+                           {"the_method": dict(method_rules, dies=["U1"])})
+
+
+def test_named_vs_unclaimed_close_pair_is_flagged(tmp_path):
+    """The named-vs-unclaimed regression: a claimed pad 20 um from an unclaimed pad, with
+    an adapter loaded (40 um spacing), must be flagged in per-method mode.
+    Neither intra-region check can see this pair; the cross check must.
+    Red on the deck before the fix (exit 0, zero markers), green after."""
+    gds = tmp_path / "split.gds"
+    methods = _claimed_unclaimed_gds(gds, 515, COARSE)   # 495 -> 515: 20 um gap
+    v = _checked(gds, tmp_path / "run", 1,
+                 interconnect_adapter="ihp_cupillar",
+                 interconnect_methods=methods)
+    assert "IXN.x.the_method.unclaimed" in v, f"got {sorted(v)}"
+    # One pad per side: no intra-region violations, and no global names.
+    assert "IXN.b.the_method" not in v, f"got {sorted(v)}"
+    assert "IXN.b.unclaimed" not in v, f"got {sorted(v)}"
+    assert "IXN.b" not in v and "IXN.e" not in v, f"got {sorted(v)}"
+
+
+def test_named_vs_unclaimed_far_pair_is_clean(tmp_path):
+    """Negative control: the same split with the unclaimed pad 105 um away
+    (well over the 40 um spacing) reports no IXN violation at all."""
+    gds = tmp_path / "far.gds"
+    methods = _claimed_unclaimed_gds(gds, 600, COARSE)   # 495 -> 600: 105 um gap
+    v = _checked(gds, tmp_path / "run", 0,
+                 interconnect_adapter="ihp_cupillar",
+                 interconnect_methods=methods)
+    assert not any(r.startswith("IXN") for r in v), f"got {sorted(v)}"
+
+
+def test_named_vs_unclaimed_uses_stricter_of_method_and_adapter(tmp_path):
+    """The cross rule is max(method spacing, adapter spacing), mirroring
+    IXN.x.<m1>.<m2>. A FINE method (15 um) would accept a 20 um gap on its
+    own; with the coarse adapter (40 um) loaded the pair must still fail."""
+    gds = tmp_path / "strict.gds"
+    methods = _claimed_unclaimed_gds(gds, 515, FINE)     # 20 um gap, fine method
+    v = _checked(gds, tmp_path / "run", 1,
+                 interconnect_adapter="ihp_cupillar",
+                 interconnect_methods=methods)
+    assert "IXN.x.the_method.unclaimed" in v, (
+        f"adapter spacing (40) must dominate the fine method (15), got {sorted(v)}")
+
+
+def test_no_adapter_unclaimed_pads_are_reported_unassociated(tmp_path):
+    """Without an adapter the unclaimed pads have no rule at all, so a
+    named-vs-unclaimed pair is unverifiable. The deck must say so as a
+    finding (exit 1), not log a line and sign off clean. No number is
+    invented: no cross-pair rule fires without an adapter."""
+    gds = tmp_path / "noadapter.gds"
+    methods = _claimed_unclaimed_gds(gds, 515, COARSE)
+    v = _checked(gds, tmp_path / "run", 1, interconnect_methods=methods)
+    assert "IXN.unassociated" in v, f"got {sorted(v)}"
+    assert not any(r.startswith("IXN.x") for r in v), f"got {sorted(v)}"
+
+
+def test_no_adapter_all_pads_claimed_has_no_unassociated_finding(tmp_path):
+    """Negative control for the finding: when every pad is claimed there are
+    no unclaimed pads to report, adapter or not."""
+    gds = tmp_path / "allclaimed.gds"
+    ly = kdb.Layout()
+    ly.dbu = 0.001
+    top = ly.create_cell("TOP")
+    pad = ly.layer(*ATTACHMENT_LAYER)
+    top.shapes(pad).insert(kdb.Box(_um(100), _um(100), _um(135), _um(135)))
+    ly.write(str(gds))
+    methods = _write_sidecars(gds, [_boundary("U1", 0, 0, 500, 500)],
+                              {"the_method": dict(COARSE, dies=["U1"])})
+    v = _checked(gds, tmp_path / "run", 0, interconnect_methods=methods)
+    assert "IXN.unassociated" not in v, f"got {sorted(v)}"
+
+
+def test_abort_satisfies_neither_verdict(tmp_path):
+    """Process-failure control for the helper the cases above rely on. A run
+    that aborts inside the deck (methods file naming a die the manifest does
+    not have) must satisfy NEITHER verdict: not 'clean' (exit 0, empty report)
+    and not 'finding' (exit 1 with items). Whatever exit KLayout uses for a
+    raise, _checked must go red both ways instead of handing back an empty
+    rule set that reads as a clean run."""
+    gds = tmp_path / "abort.gds"
+    _claimed_unclaimed_gds(gds, 515, COARSE)
+    methods = _write_sidecars(gds, [_boundary("U1", 0, 0, 500, 500)],
+                              {"the_method": dict(COARSE, dies=["U9"])})
+    for expect in (0, 1):
+        with pytest.raises(AssertionError):
+            _checked(gds, tmp_path / f"run{expect}", expect,
+                     interconnect_adapter="ihp_cupillar",
+                     interconnect_methods=methods)
+
+
+# The exact raise 8_2_interconnect.drc emits for the stimulus below: methods
+# naming die U9 while the manifest declares only U1. Pinning it (die names
+# included) is what keeps the test about THIS abort: a missing adapter, a
+# broken KLayout or any other engine failure also exits 2 with the runner's
+# banner, and would otherwise satisfy the case without the deck ever reaching
+# its manifest cross-check.
+ABORT_DECK_DIAGNOSTIC = (
+    "Per-method interconnect references die instance(s) not in the boundary "
+    "manifest: U9. Manifest instances: U1."
+)
+
+
+def test_abort_exits_2_with_an_engine_diagnostic(tmp_path):
+    """A deck abort is an ENGINE failure, not a verdict. KLayout
+    itself exits 1 on a raise, the code this runner uses for findings, and the
+    aborted run leaves an empty report that reads as clean; the runner must
+    therefore exit 2 with a diagnostic naming the failure, never 0 or 1.
+    Both diagnostics are required: the runner's own banner, and the deck's
+    raise text for this stimulus (a method referencing die U9 against a
+    manifest holding only U1), so a generic engine failure from another cause
+    cannot pass the test.
+    Reverting the mapping in run_drc.py (returning the deck's own code) turns
+    this test red on the exit assertion; that is the sensitivity witness."""
+    gds = tmp_path / "abort.gds"
+    _claimed_unclaimed_gds(gds, 515, COARSE)
+    methods = _write_sidecars(gds, [_boundary("U1", 0, 0, 500, 500)],
+                              {"the_method": dict(COARSE, dies=["U9"])})
+    run_dir = tmp_path / "run_abort"
+    report = run_dir / "report.lyrdb"
+    proc = _run(gds, run_dir, report, interconnect_adapter="ihp_cupillar",
+                interconnect_methods=methods)
+    assert proc.returncode == 2, (
+        f"exit {proc.returncode}, expected 2 (engine failure)\n"
+        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+    assert "ADK DRC engine failure" in proc.stderr, proc.stderr
+    # The deck's raise, compared on collapsed whitespace so a line break in
+    # KLayout's error formatting cannot hide it. Channel is not pinned: only
+    # the runner's banner has a proven stream, the deck's error is KLayout's.
+    combined = " ".join((proc.stdout + "\n" + proc.stderr).split())
+    assert ABORT_DECK_DIAGNOSTIC in combined, (
+        f"deck diagnostic {ABORT_DECK_DIAGNOSTIC!r} not found\n"
+        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+    # Whatever the aborted deck left behind carries no finding.
+    assert not report.is_file() or not get_rules_with_violations(report)

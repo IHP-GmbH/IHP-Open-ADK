@@ -1,0 +1,77 @@
+# Derived from views_demo.chiplet by chiplet2dbx (ADK); regenerate, do not edit.
+Header:
+  version: 3
+  unit: micron
+  precision: 1000
+
+ChipletDef:
+  DIE_F:
+    type: die
+    design_area: [100, 80]
+    thickness: 150
+    external:
+      APR_tech_file: [../records/U1/tech_lef/fix_tech.lef]
+      LEF_file: [../records/U1/lef/fix_pads.lef]
+      liberty_file: [../records/U1/liberty/fix_typ.lib]
+      DEF_file: ../records/U1/def/DIE_F.def
+    regions:
+      front:
+        side: front
+        bmap: DIE_F.bmap
+        coords:
+          - [0, 0]
+          - [100, 0]
+          - [100, 80]
+          - [0, 80]
+      back:
+        side: back
+        coords:
+          - [0, 0]
+          - [100, 0]
+          - [100, 80]
+          - [0, 80]
+  DIE_U:
+    type: die
+    design_area: [100, 80]
+    thickness: 150
+    external:
+      APR_tech_file: [../records/U2/tech_lef/fix_tech.lef]
+      LEF_file: [../records/U2/lef/fix_pads.lef]
+      DEF_file: ../records/U2/def/DIE_U.def
+    regions:
+      front:
+        side: front
+        bmap: DIE_U.bmap
+        coords:
+          - [0, 0]
+          - [100, 0]
+          - [100, 80]
+          - [0, 80]
+      back:
+        side: back
+        coords:
+          - [0, 0]
+          - [100, 0]
+          - [100, 80]
+          - [0, 80]
+  SUBSTRATE:
+    type: substrate
+    design_area: [400, 300]
+    thickness: 10
+    external:
+      APR_tech_file: [subst.lef]
+    regions:
+      front:
+        side: front
+        coords:
+          - [0, 0]
+          - [400, 0]
+          - [400, 300]
+          - [0, 300]
+      back:
+        side: back
+        coords:
+          - [0, 0]
+          - [400, 0]
+          - [400, 300]
+          - [0, 300]

@@ -19,7 +19,7 @@ import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Set, Union
+from typing import Dict, List, Optional, Set, Union
 
 import klayout.db
 
@@ -31,6 +31,23 @@ if str(_ADK_ROOT) not in sys.path:
     sys.path.insert(0, str(_ADK_ROOT))
 
 import adk_registry  # noqa: E402
+
+# Exit codes of this runner. 0 and 1 are verdicts, and only for a run that
+# reached the deck, ran it to completion and came back with a valid report:
+#   0  clean: the deck ran to the end, the report has no item
+#   1  findings: the deck ran to the end, some rule has items
+#   2  engine failure: the deck aborted (KLayout's own exit for a raise is 1,
+#      which is why it is not passed through) or wrote no report
+# This table does NOT classify every exit of this process. The paths around the
+# deck keep their own codes: argument validation and the input/sidecar
+# preconditions exit 1, adapter and registry resolution exits with
+# adk_registry's table (1 usage, 5 source, 6 version, 7 internal) before the
+# deck is spawned, and a report that cannot be parsed raises out of main. So
+# exit 1 is not by itself a findings verdict; a caller that reads any exit 1 as
+# "findings", or any non-zero code as "not clean", is wrong.
+EXIT_CLEAN = 0
+EXIT_FINDINGS = 1
+EXIT_ENGINE = 2
 
 # Exact-match pin on the boundary-manifest version this runner understands;
 # schema and version policy live in docs/boundary_manifest.md. The viewer
@@ -77,6 +94,23 @@ def get_rules_with_violations(results_database: Union[str, Path]) -> Set[str]:
             violating_rules.add(category.text.replace("'", ""))
 
     return violating_rules
+
+
+# The description the deck gives a rule it did not check (8_1_assembly.drc):
+# "<rule> : not applicable: <reason>", over a category with no item.
+NOT_APPLICABLE = " : not applicable: "
+
+
+def get_rules_not_checked(results_database: Union[str, Path]) -> Dict[str, str]:
+    """Rule names the deck reported as not applicable, each with its reason."""
+    root = ET.parse(Path(results_database)).getroot()
+    not_checked = {}
+    for category in root.findall("categories/category"):
+        name = (category.findtext("name") or "").strip().replace("'", "")
+        description = (category.findtext("description") or "").strip()
+        if description.startswith(name + NOT_APPLICABLE):
+            not_checked[name] = description[len(name + NOT_APPLICABLE):]
+    return not_checked
 
 
 # ================================================================
@@ -455,8 +489,12 @@ def run_assembly_drc(layout_path: str, adapter_path: str, topcell: str,
 def check_drc_results(report_path: Path) -> Set[str]:
     """Parse the report and log a pass/fail banner. Returns the rule set."""
     if not report_path.is_file():
-        logging.error(f"Result database not generated: {report_path}")
-        sys.exit(1)
+        # The deck exited 0 without writing its report: no verdict either.
+        logging.error(
+            "ADK DRC engine failure: result database not generated at %s "
+            "(no findings, no clean result). Exit %d.", report_path, EXIT_ENGINE,
+        )
+        sys.exit(EXIT_ENGINE)
 
     violating_rules = get_rules_with_violations(report_path)
 
@@ -469,6 +507,10 @@ def check_drc_results(report_path: Path) -> Set[str]:
         logging.info("=" * 70)
         logging.info("ADK DRC PASSED: No violations detected")
         logging.info("=" * 70)
+
+    # A rule the deck did not apply is neither passed nor failed: list it apart.
+    for rule, reason in sorted(get_rules_not_checked(report_path).items()):
+        logging.info("ADK DRC not checked: %s (%s)", rule, reason)
 
     logging.info(f"Report: {report_path}")
     return violating_rules
@@ -643,18 +685,23 @@ def main():
     except subprocess.CalledProcessError as e:
         # The deck (klayout) exited non-zero: an adapter missing a required
         # input, a deck raise, etc. The KLayout error is already on stderr and
-        # run_assembly_drc logged a one-line banner; exit cleanly with the
-        # deck's code instead of dumping a Python traceback. Exit codes:
-        # 0 = clean, 1 = violations (the normal path below); a deck/tooling
-        # failure surfaces as klayout's own non-zero code (or 2 as a fallback).
-        return e.returncode or 2
+        # run_assembly_drc logged a one-line banner. KLayout exits 1 on a
+        # raise, the same code this runner uses for findings, so the deck's
+        # code is NOT passed through: an engine failure is not a verdict and
+        # must never read as one.
+        logging.error(
+            "ADK DRC engine failure: the deck exited %s before a verdict "
+            "(no findings, no clean result). Exit %d.",
+            e.returncode, EXIT_ENGINE,
+        )
+        return EXIT_ENGINE
 
     violations = check_drc_results(report)
 
     elapsed = time.time() - time_start
     logging.info(f"Total DRC time: {elapsed:.2f}s")
 
-    return 1 if violations else 0
+    return EXIT_FINDINGS if violations else EXIT_CLEAN
 
 
 if __name__ == "__main__":

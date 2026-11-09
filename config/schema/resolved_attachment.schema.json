@@ -1,0 +1,112 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://heterogenic-chip-design-project/adk/config/schema/resolved_attachment.schema.json",
+    "title": "ADK resolved-v2 attachment sidecar",
+    "description": "Sidecar consumed by bridges/assembly_lvs/resolved_v2_entry.py beside an assembly-lvs resolved v2 document. It authors what the resolved contract does not carry and the ADK view requires (adapter ids, attachment layers, attachment surface z, die thickness and declared dimensions, connection methods, technologies) and binds by sha256 every file the entry opens. Numbers are read as exact decimals from their JSON text. Paths are portable ('/' only): 'document' and 'dies_root' point at roots relative to the sidecar directory and may traverse; every other path is in-root (relative, no '..', no absolute).",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["schema", "version", "document", "dies_root", "binds", "interposer", "interconnect", "technologies", "components"],
+    "$defs": {
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}(?![\\s\\S])" },
+        "input_identity": {
+            "type": "object", "additionalProperties": false, "required": ["path", "sha256"],
+            "properties": {
+                "path": { "type": "string", "minLength": 1, "description": "Relative to the sidecar directory, '/' only." },
+                "sha256": { "$ref": "#/$defs/sha256" }
+            }
+        },
+        "layer_pair": {
+            "type": "array", "minItems": 2, "maxItems": 2,
+            "items": { "type": "integer", "minimum": 0, "maximum": 65535 }
+        },
+        "in_root_path": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[^\\\\]*(?![\\s\\S])" },
+        "positive": { "type": "number", "exclusiveMinimum": 0 }
+    },
+    "properties": {
+        "schema": { "const": "adk-resolved-attachment" },
+        "version": { "const": "1.0.0" },
+        "document": { "type": "string", "minLength": 1, "description": "The resolved v2 document, relative to the sidecar directory. Its directory is the root of the three layouts it names." },
+        "dies_root": { "type": "string", "minLength": 1, "description": "Directory, relative to the sidecar, under which components[].layout (the ADK die layouts) are in-root paths." },
+        "derived_from": {
+            "type": "object", "additionalProperties": false, "required": ["chiplet", "pillars"],
+            "description": "Identities of the derivation inputs written by derive_attachment_sidecar.py: the accepted .chiplet and the pillar manifest. chiplet.sha256 must equal the expect_chiplet file's sha256.",
+            "properties": {
+                "chiplet": { "$ref": "#/$defs/input_identity" },
+                "pillars": { "$ref": "#/$defs/input_identity" }
+            }
+        },
+        "binds": {
+            "type": "object", "additionalProperties": false,
+            "required": ["document", "layouts", "die_layouts", "methods_manifest", "adapter_deck"],
+            "properties": {
+                "document": { "$ref": "#/$defs/sha256" },
+                "layouts": { "type": "object", "description": "component id -> sha256 of the layout the resolved document names for it (every component, exactly).", "additionalProperties": { "$ref": "#/$defs/sha256" } },
+                "die_layouts": { "type": "object", "description": "die id -> sha256 of the ADK die layout (every die, exactly).", "additionalProperties": { "$ref": "#/$defs/sha256" } },
+                "methods_manifest": { "$ref": "#/$defs/sha256" },
+                "adapter_deck": { "$ref": "#/$defs/sha256" }
+            }
+        },
+        "interposer": {
+            "type": "object", "additionalProperties": false,
+            "required": ["adapter", "technology", "attachment_surface_z", "position_z", "thickness", "attachment_layers"],
+            "properties": {
+                "adapter": { "type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*(?![\\s\\S])", "description": "Registry adapter id of the interposer adapter deck (never a path)." },
+                "technology": { "type": "string", "minLength": 1, "description": "Key into technologies for the interposer component." },
+                "attachment_surface_z": { "$ref": "#/$defs/positive" },
+                "position_z": { "type": "number" },
+                "thickness": { "$ref": "#/$defs/positive" },
+                "attachment_layers": {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["opening", "dfpad", "body", "body2", "mark"],
+                    "properties": {
+                        "opening": { "$ref": "#/$defs/layer_pair" },
+                        "dfpad": { "$ref": "#/$defs/layer_pair" },
+                        "body": { "$ref": "#/$defs/layer_pair" },
+                        "body2": { "$ref": "#/$defs/layer_pair" },
+                        "mark": { "$ref": "#/$defs/layer_pair" }
+                    },
+                    "description": "opening and dfpad must equal the pillar branch of the adapter deck's chiplet_attachment_input line; body, body2 and mark are the 3D-aux and recognition layers."
+                },
+                "io_class": { "type": "string", "minLength": 1, "description": "io_class written on every emitted .chiplet io_pad (optional)." },
+                "layer_names": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 }, "description": "resolved technology layer -> .chiplet layer name for io_pads (optional)." }
+            }
+        },
+        "interconnect": {
+            "type": "object", "additionalProperties": false,
+            "required": ["adapter", "methods_manifest"],
+            "properties": {
+                "adapter": { "type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*(?![\\s\\S])" },
+                "methods_manifest": { "$ref": "#/$defs/in_root_path", "description": "In-root path under the registry root INTERCONNECT_PDK." },
+                "technology": { "type": "object", "description": "Copied verbatim into the .chiplet interconnect.technology block (optional)." }
+            }
+        },
+        "technologies": {
+            "type": "object", "minProperties": 1,
+            "additionalProperties": {
+                "type": "object", "required": ["dbu"],
+                "properties": { "dbu": { "$ref": "#/$defs/positive" } }
+            },
+            "description": "Copied verbatim into the .chiplet; every dbu must equal technology.grid_um."
+        },
+        "components": {
+            "type": "object", "minProperties": 1,
+            "additionalProperties": {
+                "type": "object", "additionalProperties": false,
+                "required": ["method", "technology", "thickness", "dimensions", "layout", "top_cell"],
+                "properties": {
+                    "method": { "type": "string", "minLength": 1 },
+                    "technology": { "type": "string", "minLength": 1 },
+                    "thickness": { "$ref": "#/$defs/positive" },
+                    "dimensions": {
+                        "type": "object", "additionalProperties": false, "required": ["width", "height"],
+                        "properties": { "width": { "$ref": "#/$defs/positive" }, "height": { "$ref": "#/$defs/positive" } }
+                    },
+                    "layout": { "$ref": "#/$defs/in_root_path" },
+                    "top_cell": { "type": "string", "minLength": 1 }
+                }
+            },
+            "description": "die id -> authored ADK facts (exactly the dies of the document)."
+        },
+        "expect_chiplet": { "type": "string", "minLength": 1, "description": "An accepted .chiplet, relative to the sidecar, the emitted one must round-trip against (optional)." }
+    }
+}

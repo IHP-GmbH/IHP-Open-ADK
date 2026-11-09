@@ -10,7 +10,7 @@ chiplet dies remain ordinary PDKs.
 > [!WARNING]
 > ADK is currently a preview release only!
 
-`v0.2.0`. The KLayout assembly DRC, its runner, the KiCad DRU generator, and the
+`v0.3.0`. The KLayout assembly DRC, its runner, the KiCad DRU generator, and the
 IHP interposer adapter are implemented and exercised by the regression suite.
 
 ## What it checks
@@ -18,8 +18,9 @@ IHP interposer adapter are implemented and exercised by the regression suite.
 Two independent rule axes, each driven by a PDK adapter:
 
 - **Assembly placement** (`ASM.*`): courtyard clearance and collision between
-  chiplet boundaries on the interposer. Always on; selected with
-  `--interposer-adapter`.
+  chiplet boundaries on the interposer, and die edge to interposer wire-bond
+  pad distance when the adapter declares wire-bond pads. Always on; selected
+  with `--interposer-adapter`.
 - **Interconnect** (`IXN.*`): bump-to-bump pitch and spacing for the
   attachment layer (CuPillar, solder bump, microbump). Optional; selected with
   `--interconnect-adapter`.
@@ -42,9 +43,9 @@ read from a fab layer; they come from a boundary manifest sidecar.
   OpenROAD's `check_3dblox` can lint the assembly geometry.
 - Shared layer, rule-parameter, and interconnect registries in `config/`, with
   JSON Schemas under `config/schema/`.
-- KiCad DRU generator. It covers `ASM.b` (courtyard_clearance); `ASM.a` is left
-  to KiCad's native courtyard collision check and `ASM.e`/`ASM.f` are
-  post-layout only. It is a partial mirror of the KLayout deck, not a full one.
+- KiCad DRU generator. It covers `ASM.b` (courtyard_clearance between die
+  footprints); `ASM.a` is left to KiCad's native courtyard collision check
+  and `ASM.e`/`ASM.f`/`ASM.g` are post-layout only. It is a partial mirror of the KLayout deck, not a full one.
 - Stub directories for future ADK domains: `thermal/`, `power/`, `timing/`.
 
 ## Layout
@@ -119,7 +120,9 @@ usage/validation errors. See `checks/README.md`.
 
 ```bash
 python openroad/chiplet2dbx.py --chiplet <design.chiplet> --out-dir build/3dblox \
-    [--pins U1=chiplets/die_a.pins.json ...]
+    [--pins U1=chiplets/die_a.pins.json ...] \
+    [--views U2=views/u2/eda-views.json --contract U2=contracts/die_b ...] \
+    [--corner <name>] [--top-verilog build/top.v]
 ```
 
 Produces `<name>.3dbv` (black-box ChipletDefs), `<name>.3dbx` (the placed
@@ -134,6 +137,41 @@ bump-alignment check. The export stays lossy by declaration (no artwork,
 no parasitics); the mapping conventions follow the chiplet-spec
 interoperability appendix, and the `.chiplet` file stays the authoritative
 placement source.
+
+A die given an eda-views record (`--views`, `chiplet-flow-eda-views/v1`) and
+the die contract the record must be bound to (`--contract`) is exported with
+its recorded views instead: its ChipletDef names the record's technology LEF,
+cell LEFs, Liberty files at one corner and DEF in place, relative to the
+`.3dbv`, and its bump map lists the DEF pad instances at their centres in the
+DEF frame with the die's own ports and nets. Every file used is re-hashed, and
+each pad centre, the DEF units and the die area are checked against the DEF
+before anything is written; a pad must be placed `N` on a one-pin master, one
+pad per port. Such a die declares `anchor: bbox_center`; a
+flipped one is placed `MZ_MY` (OpenROAD's `MZ` mirrors z only). A
+`--top-verilog` system top is named as the Design's Verilog after its module,
+instances and ports are checked against the records. The records are read,
+never qualified: the export says nothing about the timing of the assembly.
+
+## Bridging an assembly-lvs resolved v2 document
+
+`bridges/assembly_lvs/resolved_v2_entry.py` builds the ADK view of an assembly
+described by an assembly-lvs resolved v2 document: assembled GDS (carrier
+geometry preserved, ADK die layouts instanced), boundary manifest, IXN and
+pillar sidecars, `.chiplet` and an entry manifest with the frame constants and
+the exhaustive terminal correspondence. The sidecar it needs is derived from an
+accepted `.chiplet` by `bridges/assembly_lvs/derive_attachment_sidecar.py`.
+
+```
+python bridges/assembly_lvs/derive_attachment_sidecar.py --chiplet <design.chiplet> \
+    --pillars <assembly.pillars.json> --document <resolved.json> --dies-root <dies dir> \
+    --out <resolved stem>.adk_attachment.json
+python bridges/assembly_lvs/resolved_v2_entry.py --sidecar <resolved stem>.adk_attachment.json \
+    --out build/entry
+```
+
+The entry runs neither DRC nor LVS; its manifest lists the `run_drc.py` and
+`pads_vs_pillars.py` commands to run next. See `docs/resolved_v2_entry.md` for
+the frames, the accepted subset of v2 and the corpus-binding controls.
 
 ## License
 

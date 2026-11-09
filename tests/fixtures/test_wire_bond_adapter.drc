@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Synthetic interposer adapter for ADK regression tests, with wire-bond pads.
+#
+# As test_interposer_adapter.drc, plus wire-bond pads over a fabricated layer
+# (998/0), declared as a lambda over a layout source as the contract asks.
+
+chiplet_attachment_input = polygons(999, 0)
+
+wire_bond_pad_input = lambda { |src| src.polygons(998, 0) }

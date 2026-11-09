@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# ADK interposer wire-bond pads, read from the carrier only.
+#
+# An interposer adapter MAY declare `wire_bond_pad_input`: a lambda that takes
+# a layout source and returns the interposer's wire-bond pad region from it.
+# The die layouts in an assembly GDS can carry bond pads on the same layers as
+# the interposer's, so the lambda is called on a source with every die cell
+# pruned from the hierarchy, never on the full layout. A pad the carrier draws
+# under a die is still read; excluding by position would drop it. The lambda
+# must read its layers from the source it is given (`src.polygons(...)`): a
+# bare `polygons(...)` reads the full layout, die pads included.
+#
+# Die cells are named exactly, one per boundary manifest record: the record's
+# `cell` when it carries one (the ADK's resolved-v2 entry, which shares one
+# cell between instances of a die), otherwise `<instance>_<source_die>`, with
+# `_flipped` appended when the record's transform mirrors (the exporter's
+# naming). A record whose cell is not in the
+# layout refuses the run, since reading pads past an unknown die would read the
+# die's own pads.
+#
+# Sets `wire_bond_pads` (a region, or nil) and `asm_g_not_applicable` (the
+# reason ASM.g is not checked, or nil) for 8_1_assembly.drc.
+
+wire_bond_pads = nil
+asm_g_not_applicable = nil
+
+if !defined?(wire_bond_pad_input) || wire_bond_pad_input.nil?
+  asm_g_not_applicable = 'the interposer adapter declares no wire-bond pads'
+elsif !wire_bond_pad_input.respond_to?(:call)
+  raise 'Interposer adapter (' + $adapter.inspect + ") declares 'wire_bond_pad_input' as " \
+        'something other than a lambda taking a layout source.'
+elsif defined?(legacy_exchange0) && legacy_exchange0
+  asm_g_not_applicable = 'legacy exchange0 mode has no boundary manifest to name the die cells'
+else
+  die_cells = (boundary_manifest['boundaries'] || []).each_with_index.map do |record, i|
+    instance = record['instance'].to_s
+    source_die = record['source_die'].to_s
+    name = record['cell'].to_s
+    if name.empty?
+      if instance.empty? || source_die.empty?
+        raise "ASM.g: boundary manifest record #{i} names no cell and no instance or no " \
+              'source_die, so its die cell cannot be named and the carrier pads cannot be ' \
+              'read apart from it.'
+      end
+      name = "#{instance}_#{source_die}"
+      name += '_flipped' if (record['transform'] || {})['mirror_x'] == true
+    end
+    if source.layout.cell(name).nil?
+      raise "ASM.g: boundary manifest record #{instance.empty? ? i : instance} names die cell " \
+            "#{name.inspect}, " \
+            'which is not in the layout; refusing to read wire-bond pads without excluding it.'
+    end
+    name
+  end
+  # select takes glob patterns: every character but [A-Za-z0-9_] is escaped,
+  # so each pattern matches its one cell name and nothing else.
+  filters = die_cells.uniq.map { |name| '-' + name.gsub(/[^A-Za-z0-9_]/) { |c| "\\#{c}" } }
+  carrier_source = filters.empty? ? source : source.select(*filters)
+  wire_bond_pads = wire_bond_pad_input.call(carrier_source)
+  unless wire_bond_pads.is_a?(DRC::DRCLayer)
+    raise 'Interposer adapter (' + $adapter.inspect + ") 'wire_bond_pad_input' returned " \
+          "#{wire_bond_pads.class}, not a layer."
+  end
+  logger.info("ADK: ASM.g reads wire-bond pads from the carrier, #{die_cells.uniq.size} die cells excluded")
+end

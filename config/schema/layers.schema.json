@@ -10,12 +10,12 @@
         "layers": {
             "type": "object",
             "patternProperties": {
-                "^[a-z][a-z0-9_]*$": {
+                "^[a-z][a-z0-9_]*(?![\\s\\S])": {
                     "type": "object",
                     "required": ["gds_layer", "gds_datatype"],
                     "properties": {
-                        "gds_layer": { "type": "integer", "minimum": 0, "maximum": 255 },
-                        "gds_datatype": { "type": "integer", "minimum": 0, "maximum": 255 },
+                        "gds_layer": { "type": "integer", "minimum": 0, "maximum": 65535, "description": "GDSII layer number. The stream format carries a 16-bit field and real PDKs use values above 255 (the intm4tm2 interposer maps datatypes 300 and 301), so the cap is the field width, not the classic 0-255 convention." },
+                        "gds_datatype": { "type": "integer", "minimum": 0, "maximum": 65535, "description": "GDSII datatype number, same 16-bit cap as gds_layer." },
                         "purpose": { "type": "string" }
                     },
                     "additionalProperties": false

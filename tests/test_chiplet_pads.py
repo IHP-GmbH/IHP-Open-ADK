@@ -16,16 +16,18 @@ CHIPLET_PADS_JSON = ADK_ROOT / "config" / "chiplet_pads.json"
 
 
 def test_chiplet_pads_obeys_registry_schema():
-    """Same constraints as config/schema/layers.schema.json, checked without
+    """Same constraints as config/schema/layers.schema.json (as vendored from
+    chiplet-spec: names anchored with (?![\\s\\S]) so a trailing line break is
+    refused, gds numbers capped at the 16-bit stream field), checked without
     requiring the jsonschema package."""
     data = json.loads(CHIPLET_PADS_JSON.read_text())
     assert "version" in data and "layers" in data
-    name_re = re.compile(r"^[a-z][a-z0-9_]*$")
+    name_re = re.compile(r"^[a-z][a-z0-9_]*(?![\s\S])")
     for name, entry in data["layers"].items():
         assert name_re.match(name), name
         assert set(entry) <= {"gds_layer", "gds_datatype", "purpose"}
-        assert 0 <= entry["gds_layer"] <= 255
-        assert 0 <= entry["gds_datatype"] <= 255
+        assert 0 <= entry["gds_layer"] <= 65535
+        assert 0 <= entry["gds_datatype"] <= 65535
 
 
 def test_canonical_layers_present():
