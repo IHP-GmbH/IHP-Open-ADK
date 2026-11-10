@@ -16,8 +16,8 @@ CHIPLET_PADS_JSON = ADK_ROOT / "config" / "chiplet_pads.json"
 
 
 def test_chiplet_pads_obeys_registry_schema():
-    """Same constraints as config/schema/layers.schema.json (as vendored with
-    reader 1.21.0: names anchored with (?![\\s\\S]) so a trailing line break is
+    """Same constraints as config/schema/layers.schema.json (as vendored from
+    chiplet-spec: names anchored with (?![\\s\\S]) so a trailing line break is
     refused, gds numbers capped at the 16-bit stream field), checked without
     requiring the jsonschema package."""
     data = json.loads(CHIPLET_PADS_JSON.read_text())

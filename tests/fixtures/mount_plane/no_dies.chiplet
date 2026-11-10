@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 IHP GmbH
+# Mount-plane case "no dies": an interposer with no attachment_surface_z and no die
+# or die array beside it. It seats nothing, so it needs no mount plane and every
+# tool accepts it. Expectations in cases.json.
+format_version: "1.0"
+assembly:
+  name: "mount_plane_no_dies"
+  units: "um"
+technologies:
+  "case_interposer":
+    description: "Synthetic interposer technology, case data only"
+    dbu: 0.001
+components:
+  - id: "interposer"
+    type: interposer
+    technology: "case_interposer"
+    anchor: bbox_center
+    top_cell: "INTERPOSER"
+    position: {x: 2000.0, y: 1500.0, z: 0.0}
+    dimensions: {width: 4000.0, height: 3000.0, thickness: 200.0}

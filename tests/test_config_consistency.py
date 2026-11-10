@@ -57,9 +57,10 @@ def test_config_obeys_its_schema(config, schema):
 
 
 # ---------------------------------------------------------------------------
-# Semantic controls. The four schemas under config/schema/ are vendored
-# from chiplet-spec with reader 1.21.0 (the commit vendor/README.md names; the
-# schemas are unchanged since reader 1.5.0). Two semantics changed on the way
+# Semantic controls. Four schemas under config/schema/ (boundary_manifest,
+# interconnect, layers, rule_params) are vendored from chiplet-spec and equal
+# its schemas at the commit vendor/README.md names; they are unchanged since
+# reader 1.5.0. Two semantics changed on the way
 # from the previous copies and this file proves both are live HERE, not only in
 # the reference: every key/name pattern ends in (?![\s\S]) instead of $, so a
 # value or key with a trailing line break is refused (with $, Python's regex
@@ -116,7 +117,7 @@ def test_schema_anchors_refuse_a_trailing_line_break(schema_name, good, smuggled
     assert _valid(schema, good)
     assert not _valid(schema, smuggled), (
         f"{schema_name} accepted a trailing line break; the vendored copy is "
-        f"not the reader 1.21.0 one or the anchor is not live")
+        f"not chiplet-spec's or the anchor is not live")
     # Sensitivity: with `$` back in place the same instance passes, so the
     # refusal above is the anchor's doing and not some other constraint.
     assert _valid(_weakened(schema), smuggled)

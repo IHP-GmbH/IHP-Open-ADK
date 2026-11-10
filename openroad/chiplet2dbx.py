@@ -88,7 +88,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 ADK_ROOT = Path(__file__).resolve().parents[1]
 VENDOR_DIR = ADK_ROOT / "vendor"
@@ -179,19 +179,26 @@ def _require_dimension(comp: Dict[str, Any], key: str) -> float:
     return value
 
 
-def _mount_reference(interposer: Dict[str, Any]) -> float:
-    """The interposer surface dies mount on, in the assembly z-frame.
+def _substrate_thickness(interposer: Dict[str, Any], seats_dies: bool) -> float:
+    """The 3Dblox substrate def thickness: the height above the interposer's
+    position.z that dies mount at.
 
-    Prefers the component-level ``attachment_surface_z`` (the BEOL-top
-    die-attachment plane, decoupled from the physical interposer body). Falls
-    back to ``dimensions.thickness`` for legacy .chiplet files, where thickness
-    encoded that surface. The 3Dblox substrate is a thin mount plane, so this
-    reference is both the substrate def thickness and the die mount z; the
-    physical interposer body is intentionally not modelled here.
+    The 3Dblox substrate is a thin mount plane, not the physical interposer
+    body. When the interposer seats dies it is the interposer component's
+    ``attachment_surface_z`` (the die-attachment plane), and a missing one is
+    refused: ``dimensions.thickness`` is the body and does not stand in for
+    it. An interposer that seats nothing needs no plane; its def then takes
+    the body thickness, unless it declares a plane anyway.
     """
     asz = interposer.get("attachment_surface_z")
     if asz is None:
-        return _require_dimension(interposer, "thickness")
+        if not seats_dies:
+            return _require_dimension(interposer, "thickness")
+        raise ExportError(
+            "interposer %r seats dies but declares no attachment_surface_z; "
+            "declare the plane it mounts them on. dimensions.thickness is "
+            "the body, not the plane, and is not read in its place"
+            % interposer.get("id"))
     value = float(asz)
     if value <= 0:
         raise ExportError(
@@ -787,7 +794,13 @@ def _check_die_anchor(comp: Dict[str, Any], views: bool = False) -> None:
         % (comp.get("id"), anchor))
 
 
-def _split_components(assembly: Dict[str, Any], view_refs=()):
+class _Parts(NamedTuple):
+    interposer: Dict[str, Any]
+    dies: List[Dict[str, Any]]  # sorted by id
+    mount_ref: float  # _substrate_thickness
+
+
+def _split_components(assembly: Dict[str, Any], view_refs=()) -> _Parts:
     interposers = []
     dies = []
     for comp in assembly.get("components") or []:
@@ -795,7 +808,6 @@ def _split_components(assembly: Dict[str, Any], view_refs=()):
         if ctype == "interposer":
             interposers.append(comp)
         elif ctype == "die":
-            _check_die_anchor(comp, str(comp.get("id")) in view_refs)
             dies.append(comp)
         else:
             raise ExportError(
@@ -807,7 +819,13 @@ def _split_components(assembly: Dict[str, Any], view_refs=()):
             "expected exactly one interposer component, found %d"
             % len(interposers)
         )
-    return interposers[0], sorted(dies, key=lambda c: str(c.get("id")))
+    # Read before any die is judged, so a file that seats dies with no plane
+    # is refused for that first; every caller, the view listing included.
+    substrate = _substrate_thickness(interposers[0], bool(dies))
+    for die in dies:
+        _check_die_anchor(die, str(die.get("id")) in view_refs)
+    return _Parts(interposers[0], sorted(dies, key=lambda c: str(c.get("id"))),
+                  substrate)
 
 
 def _bump_macro_name(method_id: str) -> str:
@@ -912,16 +930,11 @@ def _build_model(assembly: Dict[str, Any],
             "assembly.units is %r; only %r is supported" % (units, SUPPORTED_UNITS)
         )
 
-    interposer, dies = _split_components(assembly, set(die_views))
+    interposer, dies, mount_ref = _split_components(assembly, set(die_views))
     precision = _precision(assembly)
 
     ipos_w = _require_dimension(interposer, "width")
     ipos_h = _require_dimension(interposer, "height")
-    # The 3Dblox substrate is a THIN mount plane, not the physical interposer
-    # body: its def thickness and the die mount surface are both the
-    # interposer's die-attachment surface z (attachment_surface_z when the
-    # .chiplet declares it, else the legacy dimensions.thickness).
-    mount_ref = _mount_reference(interposer)
     ipos_x, ipos_y, ipos_z = _position(interposer)
     mount_z = ipos_z + mount_ref
 
@@ -1464,7 +1477,7 @@ def _views_lines(assembly: Dict[str, Any], loaded_views: Dict[str, Any]
     export and the files of those rows the record states unqualified, or
     ``absent`` for a die exported without a record."""
     lines = []
-    for die in _split_components(assembly, set(loaded_views))[1]:
+    for die in _split_components(assembly, set(loaded_views)).dies:
         ref = str(die.get("id"))
         views = loaded_views.get(ref)
         if views is None:

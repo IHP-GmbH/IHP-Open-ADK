@@ -25,7 +25,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, NamedTuple, Optional
+from typing import List, NamedTuple, Optional, Tuple
 
 import pytest
 
@@ -76,7 +76,9 @@ def base_assembly():
              "top_cell": "SUBSTRATE",
              "dimensions": {"width": 1000.0, "height": 800.0,
                             "thickness": 10.0},
-             "position": {"x": 500.0, "y": 400.0, "z": 0.0}},
+             "position": {"x": 500.0, "y": 400.0, "z": 0.0},
+             # Case data, not a physical plane: the value the dies sit on.
+             "attachment_surface_z": 10.0},
             {"id": "D1", "type": "die", "technology": "techb",
              "layout": "d1.gds", "top_cell": "DIE_A", "anchor": "gds_origin",
              "connection": "bump25", "orientation": "flip_chip",
@@ -327,7 +329,9 @@ def views_assembly():
              "top_cell": "SUBSTRATE",
              "dimensions": {"width": 400.0, "height": 300.0,
                             "thickness": 10.0},
-             "position": {"x": 200.0, "y": 150.0, "z": 0.0}},
+             "position": {"x": 200.0, "y": 150.0, "z": 0.0},
+             # Case data, not a physical plane: the value the dies sit on.
+             "attachment_surface_z": 10.0},
             die("U1", "DIE_F", 100.0, "flip_chip"),
             die("U2", "DIE_U", 300.0, "face_up"),
         ],
@@ -559,13 +563,34 @@ def test_attachment_surface_z_gap_measured_against_surface():
         chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
 
 
-def test_attachment_surface_z_absent_falls_back_to_thickness():
-    """Without attachment_surface_z, dimensions.thickness is the mount ref
-    (legacy files); base_assembly's substrate = 10 relies on this fallback."""
+def test_no_attachment_surface_z_is_refused_naming_the_interposer():
+    """A file that seats dies with no attachment_surface_z is refused, naming
+    the interposer and the remedy. dimensions.thickness is the body and is not
+    read as the plane in its place."""
     assembly = base_assembly()
-    assert "attachment_surface_z" not in assembly["components"][0]
+    del assembly["components"][0]["attachment_surface_z"]
+    with pytest.raises(ExportError, match=r"interposer 'interposer' seats dies but "
+                       r"declares no attachment_surface_z; declare the plane"):
+        chiplet2dbx.render_3dbv(assembly)
+
+
+def test_no_attachment_surface_z_is_refused_before_the_dies_are_judged():
+    """The missing plane is the refusal, even when a die would fail too."""
+    assembly = base_assembly()
+    del assembly["components"][0]["attachment_surface_z"]
+    assembly["components"][1]["anchor"] = "bbox_center"
+    with pytest.raises(ExportError, match="declares no attachment_surface_z"):
+        chiplet2dbx.render_3dbv(assembly)
+
+
+def test_an_interposer_that_seats_nothing_needs_no_plane():
+    """With no die there is nothing to mount, so no plane is needed; the
+    substrate def takes the body thickness."""
+    assembly = base_assembly()
+    del assembly["components"][0]["attachment_surface_z"]
+    assembly["components"] = assembly["components"][:1]
     dbv = chiplet2dbx.render_3dbv(assembly)
-    assert "thickness: 10\n" in dbv  # substrate = dimensions.thickness
+    assert "thickness: 10\n" in dbv
 
 
 def test_non_positive_attachment_surface_z_fails():
@@ -1278,7 +1303,9 @@ class PinVerdict(NamedTuple):
       parse_error  vendor/README.md does not declare exactly one pin
 
     Only ``skip`` is a capability gap. Everything else is the oracle telling
-    the truth about the repository or about itself, so it fails.
+    the truth about the repository or about itself, so it fails. Whether a
+    skip is allowed is the caller's call: _judge_pin_verdict fails it where
+    the run named the tree.
     """
     status: str
     detail: str
@@ -1342,13 +1369,23 @@ def _vendored_matches_declared_pin(adk_root, spec_root) -> PinVerdict:
     vendored = adk_root / "vendor" / "chiplet_format_io" / "__init__.py"
     if not vendored.is_file():
         return PinVerdict("error", "vendored reader missing: %s" % vendored, pin)
+    return _copies_match_pin(spec_root, pin, [(vendored, SPEC_REFERENCE_PATH)],
+                             "vendored chiplet_format_io")
 
+
+def _copies_match_pin(spec_root: Path, pin: str, pairs, what: str) -> PinVerdict:
+    """Whether each local copy is, byte for byte, its chiplet-spec path at the
+    commit ``pin``, read through git in spec_root. ``pairs`` is a list of
+    (local copy, path in chiplet-spec). Only a missing repository or commit
+    is a skip; everything else the oracle finds fails."""
+    spec_root = Path(spec_root)
     if not spec_root.is_dir():
         return PinVerdict(
             "skip",
             "no chiplet-spec repository at %s to resolve the declared pin %s "
             "in (set CHIPLET_SPEC_ROOT)" % (spec_root, pin), pin)
 
+    blobs = []
     try:
         probe = _git(spec_root, ["rev-parse", "--git-dir"])
         if probe.returncode != 0:
@@ -1368,17 +1405,19 @@ def _vendored_matches_declared_pin(adk_root, spec_root) -> PinVerdict:
             return _commit_absence_or_error(have, pin, spec_root)
 
         # Past this point the repository demonstrably has the commit, so a
-        # failure to read the reference file out of it is never a capability
-        # gap: either the declared pin names a commit without the file, or the
-        # repository cannot read its own blob. Both are failures.
-        show = _git(spec_root, ["show", "%s:%s" % (pin, SPEC_REFERENCE_PATH)])
-        if show.returncode != 0:
-            return PinVerdict(
-                "error",
-                "the declared pin %s exists in %s but %s could not be read "
-                "from it: exit %d, %s"
-                % (pin, spec_root, SPEC_REFERENCE_PATH, show.returncode,
-                   _git_stderr(show)), pin)
+        # failure to read a file out of it is never a capability gap: either
+        # the declared pin names a commit without the file, or the repository
+        # cannot read its own blob. Both are failures.
+        for local, spec_path in pairs:
+            show = _git(spec_root, ["show", "%s:%s" % (pin, spec_path)])
+            if show.returncode != 0:
+                return PinVerdict(
+                    "error",
+                    "the declared pin %s exists in %s but %s could not be read "
+                    "from it: exit %d, %s"
+                    % (pin, spec_root, spec_path, show.returncode,
+                       _git_stderr(show)), pin)
+            blobs.append((Path(local), spec_path, show.stdout))
     except OSError as exc:
         # No git binary, or it could not be executed. The oracle cannot run,
         # which is a broken gate, not a missing neighbour.
@@ -1387,20 +1426,45 @@ def _vendored_matches_declared_pin(adk_root, spec_root) -> PinVerdict:
             "cannot run git to resolve the declared pin %s in %s: %s"
             % (pin, spec_root, exc), pin)
 
-    vendored_bytes = vendored.read_bytes()
-    if vendored_bytes == show.stdout:
-        return PinVerdict(
-            "match",
-            "vendored reader is byte-identical to %s at the declared pin %s "
-            "(%s)" % (SPEC_REFERENCE_PATH, pin, spec_root), pin)
+    for local, spec_path, blob in blobs:
+        local_bytes = local.read_bytes()
+        if local_bytes != blob:
+            return PinVerdict(
+                "mismatch",
+                "%s does not match the declared pin %s (%s in %s): local "
+                "sha256 %s, pinned sha256 %s. Re-copy verbatim from the "
+                "declared pin, or move the pin and the copy together."
+                % (what, pin, spec_path, spec_root,
+                   hashlib.sha256(local_bytes).hexdigest(),
+                   hashlib.sha256(blob).hexdigest()), pin)
     return PinVerdict(
-        "mismatch",
-        "vendored chiplet_format_io does not match the declared pin %s (%s in "
-        "%s): vendored sha256 %s, pinned sha256 %s. Re-copy verbatim from the "
-        "declared pin, or move the pin and the copy together."
-        % (pin, SPEC_REFERENCE_PATH, spec_root,
-           hashlib.sha256(vendored_bytes).hexdigest(),
-           hashlib.sha256(show.stdout).hexdigest()), pin)
+        "match",
+        "%s is byte-identical to %s at the declared pin %s (%s)"
+        % (what, ", ".join(p for _, p in pairs), pin, spec_root), pin)
+
+
+def _spec_root() -> Tuple[Path, bool]:
+    """(the chiplet-spec tree the pin oracles read, whether the run named it).
+    CHIPLET_SPEC_ROOT names it; empty or unset falls back to the sibling."""
+    env = os.environ.get("CHIPLET_SPEC_ROOT")
+    return (Path(env), True) if env else (ADK_ROOT.parent / "chiplet-spec", False)
+
+
+def _judge_pin_verdict(verdict: PinVerdict, named: bool) -> None:
+    """Skip, fail or pass on an oracle verdict. A missing repository or commit
+    is a skip only where no one named the repository: a run that set
+    CHIPLET_SPEC_ROOT has said which tree holds the pin (the image names its
+    staged chiplet-spec), so a tree that cannot answer fails rather than
+    turning the check into an empty green."""
+    if verdict.status == "skip":
+        if named:
+            pytest.fail(
+                "CHIPLET_SPEC_ROOT names the tree, so the pin must resolve there: "
+                "%s. Stage the commit in that tree (an image names it as an extra "
+                "commit of its chiplet-spec), or unset the variable for a run "
+                "that may skip." % verdict.detail.replace(" (set CHIPLET_SPEC_ROOT)", ""))
+        pytest.skip(verdict.detail)
+    assert verdict.status == "match", verdict.detail
 
 
 def test_vendored_reader_matches_spec_reference():
@@ -1408,12 +1472,8 @@ def test_vendored_reader_matches_spec_reference():
     byte. The comparison runs through git against the DECLARED commit, so a
     chiplet-spec checkout that has moved ahead neither passes nor fails this;
     only the declaration does."""
-    env = os.environ.get("CHIPLET_SPEC_ROOT")
-    spec_root = Path(env) if env else ADK_ROOT.parent / "chiplet-spec"
-    verdict = _vendored_matches_declared_pin(ADK_ROOT, spec_root)
-    if verdict.status == "skip":
-        pytest.skip(verdict.detail)
-    assert verdict.status == "match", verdict.detail
+    spec_root, named = _spec_root()
+    _judge_pin_verdict(_vendored_matches_declared_pin(ADK_ROOT, spec_root), named)
 
 
 # ------------------------------------- declared-pin oracle, sensitivity
@@ -1462,6 +1522,36 @@ def _fake_adk(root: Path, vendored: bytes, readme: str) -> Path:
     (root / "vendor" / "chiplet_format_io" / "__init__.py").write_bytes(vendored)
     (root / "vendor" / "README.md").write_text(readme)
     return root
+
+
+@needs_git
+def test_copies_oracle_judges_every_pair(tmp_path):
+    """Over several pairs, the oracle reads and compares each one: a later pair
+    that drifted, or one the pinned commit lacks, is named."""
+    spec = tmp_path / "chiplet-spec"
+    (spec / "cases").mkdir(parents=True)
+    _run_git(spec, ["-c", "init.defaultBranch=main", "init", "-q", "."])
+    (spec / "cases" / "a").write_bytes(b"a\n")
+    (spec / "cases" / "b").write_bytes(b"b\n")
+    _run_git(spec, ["add", "-A"])
+    _run_git(spec, _FIXTURE_GIT + ["commit", "-q", "-m", "cases"])
+    pin = _run_git(spec, ["rev-parse", "HEAD"])
+    local = tmp_path / "copy"
+    local.mkdir()
+    (local / "a").write_bytes(b"a\n")
+    (local / "b").write_bytes(b"b\n")
+    pairs = [(local / "a", "cases/a"), (local / "b", "cases/b")]
+
+    good = _copies_match_pin(spec, pin, pairs, "the copy")
+    assert good.status == "match", good.detail
+    assert "cases/a, cases/b" in good.detail
+
+    (local / "b").write_bytes(b"b, edited\n")
+    drift = _copies_match_pin(spec, pin, pairs, "the copy")
+    assert drift.status == "mismatch" and "cases/b" in drift.detail, drift.detail
+
+    gone = _copies_match_pin(spec, pin, pairs + [(local / "a", "cases/c")], "the copy")
+    assert gone.status == "error" and "cases/c could not be read" in gone.detail, gone.detail
 
 
 @needs_git
@@ -1566,6 +1656,37 @@ def test_declared_pin_skips_without_a_spec_repository(tmp_path):
     verdict = _vendored_matches_declared_pin(adk, plain)
     assert verdict.status == "skip", verdict.detail
     assert str(plain) in verdict.detail and "0" * 40 in verdict.detail
+
+
+@pytest.mark.parametrize("env, named", [(None, False), ("", False), ("/x/spec", True)])
+def test_spec_root_is_named_only_by_a_non_empty_variable(monkeypatch, env, named):
+    if env is None:
+        monkeypatch.delenv("CHIPLET_SPEC_ROOT", raising=False)
+    else:
+        monkeypatch.setenv("CHIPLET_SPEC_ROOT", env)
+    root, got = _spec_root()
+    assert got is named
+    assert root == (Path(env) if named else ADK_ROOT.parent / "chiplet-spec")
+
+
+@pytest.mark.parametrize("named", [False, True])
+def test_a_named_spec_root_turns_a_skip_into_a_failure(named):
+    """A tree that cannot resolve the pin is a capability gap and skips; where
+    the run named that tree the same verdict fails, without the hint to set
+    the variable it already set."""
+    pin = MOUNT_PLANE_PIN[:7]
+    gap = PinVerdict("skip", "no commit %s here (set CHIPLET_SPEC_ROOT)" % pin, pin)
+    outcome = pytest.fail.Exception if named else pytest.skip.Exception
+    with pytest.raises(outcome, match="no commit %s here" % pin) as raised:
+        _judge_pin_verdict(gap, named)
+    assert ("(set CHIPLET_SPEC_ROOT)" in str(raised.value)) is not named
+
+
+def test_a_named_spec_root_still_passes_a_match_and_fails_a_mismatch():
+    pin = MOUNT_PLANE_PIN[:7]
+    _judge_pin_verdict(PinVerdict("match", "same bytes", pin), True)
+    with pytest.raises(AssertionError, match="drift"):
+        _judge_pin_verdict(PinVerdict("mismatch", "drift", pin), True)
 
 
 @needs_git
@@ -1823,3 +1944,92 @@ def test_live_views_top_is_read(tmp_path):
                                            "module renamed"))
     output = _run_openroad(tmp_path, "out/" + dbx.name, ok=False)
     assert "STA-1390" in output, output
+
+
+# Mount-plane conformance cases (contract section 3.4): every file of
+# chiplet-spec conformance/fixtures/mount_plane at MOUNT_PLANE_PIN, byte for
+# byte (test_mount_plane_cases_match_spec). The pin is declared here, not in
+# vendor/README.md, which declares the vendored reader's pin only. Each case's
+# "exporter" entry is what this tool must do with the file.
+#
+# Until the exporter computes a die's z itself, the evidence that the file's
+# plane wins over the interposer body is these cases' explicit-z seats and
+# test_attachment_surface_z_drives_mount_and_substrate and
+# test_attachment_surface_z_gap_measured_against_surface. The chiplet2dbx
+# goldens are not evidence of it: their plane equals their body thickness.
+MOUNT_PLANE = Path(__file__).parent / "fixtures" / "mount_plane"
+MOUNT_PLANE_PIN = "48a30522451b3bcc45754fe01633196188cab2f0"
+MOUNT_PLANE_SPEC_DIR = "conformance/fixtures/mount_plane"
+_MOUNT_PLANE_CASES = json.loads((MOUNT_PLANE / "cases.json").read_text())["cases"]
+# What the exporter does with each case today, where cases.json alone does
+# not say: the refusal it must give. The two computed-z seat cases are
+# refused for now: their dies are bbox_center anchored, have no connection
+# (no connection_height 0 fallback) and are written at z 0, which is taken
+# literally. They are pinned to that refusal, so another refusal fails, and
+# so does seating them.
+_REFUSAL = {
+    "no_plane.chiplet": ("refuse",
+                         "seats dies but declares no attachment_surface_z"),
+    "explicit_z_on_stackup_plane.chiplet": (
+        "refuse", "a .chiplet with explicit position.z must satisfy "
+                  r"z == mount_surface \+ stack height exactly"),
+    "file_wins.chiplet": ("not yet", r"^die 'U1' declares anchor bbox_center"),
+    "file_wins_off_stackup.chiplet": ("not yet",
+                                      r"^die 'U1' declares anchor bbox_center"),
+}
+
+
+def _stack_z(dbx):
+    """Each instance's z, read inside its own block of the .3dbx Stack."""
+    assert "\nStack:\n" in dbx, "no Stack section in the .3dbx"
+    stack = dbx.split("\nStack:\n", 1)[1].split("\n\n", 1)[0]
+    out = {}
+    for block in re.split(r"\n(?=  \S)", stack):
+        name = re.match(r"  (\S+):$", block.split("\n", 1)[0])
+        z = re.search(r"^    z: (\S+)$", block, re.M)
+        assert name and z, "malformed Stack block: %r" % block
+        out[name.group(1)] = float(z.group(1))
+    return out
+
+
+@pytest.mark.parametrize("case", _MOUNT_PLANE_CASES, ids=lambda c: c["file"])
+def test_mount_plane_conformance_case(case):
+    import yaml
+    assembly = yaml.safe_load((MOUNT_PLANE / case["file"]).read_text())
+    expect = case["exporter"]
+    kind, refusal = _REFUSAL.get(case["file"], (expect["outcome"], None))
+    if kind == "not yet":
+        with pytest.raises(ExportError, match=refusal):
+            chiplet2dbx.render_3dbx(assembly, "case.3dbv")
+        pytest.xfail("the exporter does not compute a die's z yet")
+    if expect["outcome"] == "refuse":
+        assert refusal, "%s is a refuse case; name its refusal in _REFUSAL" % case["file"]
+        with pytest.raises(ExportError, match=refusal):
+            chiplet2dbx.render_3dbx(assembly, "case.3dbv")
+        return
+    placed = _stack_z(chiplet2dbx.render_3dbx(assembly, "case.3dbv"))
+    interposer = {str(c["id"]) for c in assembly["components"]
+                  if c["type"] == "interposer"}
+    assert set(placed) == interposer | set(expect["dies"])
+    dies = {k: v for k, v in placed.items() if k not in interposer}
+    assert dies == pytest.approx(expect["dies"])
+
+
+def test_mount_plane_cases_match_spec():
+    """The copy is chiplet-spec's case directory at MOUNT_PLANE_PIN: the same
+    files, byte for byte, through git at the pin, so a checkout that has
+    moved on does not decide it; moving the copy means moving the pin."""
+    spec_root, named = _spec_root()
+    names = sorted(p.name for p in MOUNT_PLANE.iterdir())
+    listing = _git(spec_root, ["ls-tree", "-z", "--name-only",
+                               "%s:%s" % (MOUNT_PLANE_PIN, MOUNT_PLANE_SPEC_DIR)]) \
+        if spec_root.is_dir() else None
+    if listing is not None and listing.returncode == 0:
+        assert names == sorted(n.decode() for n in listing.stdout.split(b"\0") if n), \
+            "the copy and chiplet-spec at the pin hold different files"
+    verdict = _copies_match_pin(
+        spec_root, MOUNT_PLANE_PIN,
+        [(MOUNT_PLANE / n, "%s/%s" % (MOUNT_PLANE_SPEC_DIR, n)) for n in names],
+        "the mount-plane case copy")
+    _judge_pin_verdict(verdict, named)
+    assert listing is not None and listing.returncode == 0, _git_stderr(listing)

@@ -66,9 +66,11 @@ declared-skips = [
     # sets the variable.
     {reason = "interconnect_pdk sibling checkout not available", nodeid = "tests/test_chiplet2dbx.py::test_macro_naming_matches_generator", tiers = ["host"]},
     {reason = "interconnect_pdk sibling checkout not available", nodeid = "tests/test_chiplet2dbx.py::test_unknown_manifest_method_fails_loudly", tiers = ["host"]},
-    # The pin oracle resolves vendor/README.md's chiplet-spec commit in a
-    # repository with history; a host tier exports none.
+    # The pin oracle resolves a chiplet-spec commit (vendor/README.md's, and
+    # the mount-plane cases' pin) in a repository with history; a host tier
+    # exports none.
     {reason = "no chiplet-spec repository at", nodeid = "tests/test_chiplet2dbx.py::test_vendored_reader_matches_spec_reference", tiers = ["host"]},
+    {reason = "no chiplet-spec repository at", nodeid = "tests/test_chiplet2dbx.py::test_mount_plane_cases_match_spec", tiers = ["host"]},
     # Gated controls over a corpus and a frozen parser that only an explicit
     # root names; a skip is not acceptance evidence.
     {reason = "ADK_RESOLVED_V2_CORPUS_ROOT not set", nodeid = "tests/test_resolved_v2_entry.py::test_corpus_variant[equivalent]", tiers = ["host"]},

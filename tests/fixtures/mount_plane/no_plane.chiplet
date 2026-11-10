@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 IHP GmbH
+# Mount-plane case "no plane": an interposer that seats two dies and declares no
+# attachment_surface_z. Its thickness (200) is the body only, so the file has no
+# mount plane: an exporter that places dies in z refuses it, and a viewer shows U1
+# on the thickness as a guess, with a warning that names this file. U2 carries an
+# explicit z, which a viewer keeps; it still counts as a seated die. The
+# technology is synthetic, so no PDK key exists for it. Expectations in cases.json.
+format_version: "1.0"
+assembly:
+  name: "mount_plane_no_plane"
+  units: "um"
+technologies:
+  "case_interposer":
+    description: "Synthetic interposer technology, case data only"
+    dbu: 0.001
+  "case_die":
+    description: "Synthetic die technology, case data only"
+    dbu: 0.001
+components:
+  - id: "interposer"
+    type: interposer
+    technology: "case_interposer"
+    anchor: bbox_center
+    top_cell: "INTERPOSER"
+    position: {x: 2000.0, y: 1500.0, z: 0.0}
+    dimensions: {width: 4000.0, height: 3000.0, thickness: 200.0}
+  - id: "U1"
+    type: die
+    technology: "case_die"
+    anchor: bbox_center
+    top_cell: "DIE_U1"
+    position: {x: 1000.0, y: 1500.0, z: 0.0}
+    dimensions: {width: 800.0, height: 800.0, thickness: 300.0}
+  - id: "U2"
+    type: die
+    technology: "case_die"
+    anchor: bbox_center
+    top_cell: "DIE_U2"
+    position: {x: 3000.0, y: 1500.0, z: 250.0}
+    dimensions: {width: 800.0, height: 800.0, thickness: 300.0}

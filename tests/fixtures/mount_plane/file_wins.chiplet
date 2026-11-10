@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 IHP GmbH
+# Mount-plane case "file wins": an intm4tm2 interposer that declares
+# attachment_surface_z 10.8103, the interposer PDK's beol.attachment_surface_z_um.
+# Neither die names a connection, so both seat on the plane itself (connection
+# height 0), and both leave position.z at 0 so a tool computes it (contract section
+# 3.4). Expectations in cases.json.
+format_version: "1.0"
+assembly:
+  name: "mount_plane_file_wins"
+  units: "um"
+technologies:
+  "intm4tm2":
+    description: "IHP IntM4TM2 aluminium BEOL interposer"
+    dbu: 0.001
+  "case_die":
+    description: "Synthetic die technology, case data only"
+    dbu: 0.001
+components:
+  - id: "interposer"
+    type: interposer
+    technology: "intm4tm2"
+    anchor: bbox_center
+    top_cell: "INTERPOSER"
+    position: {x: 2000.0, y: 1500.0, z: 0.0}
+    dimensions: {width: 4000.0, height: 3000.0, thickness: 200.0}
+    attachment_surface_z: 10.8103
+  - id: "U1"
+    type: die
+    technology: "case_die"
+    anchor: bbox_center
+    top_cell: "DIE_U1"
+    position: {x: 1000.0, y: 1500.0, z: 0.0}
+    dimensions: {width: 800.0, height: 800.0, thickness: 300.0}
+  - id: "U2"
+    type: die
+    technology: "case_die"
+    anchor: bbox_center
+    top_cell: "DIE_U2"
+    position: {x: 3000.0, y: 1500.0, z: 0.0}
+    dimensions: {width: 800.0, height: 800.0, thickness: 300.0}
