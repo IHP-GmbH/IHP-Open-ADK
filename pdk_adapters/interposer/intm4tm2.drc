@@ -7,6 +7,11 @@
 # passivation opening (9/35) and the final Cu pad (41/35) overlap, and the
 # solder bump, formed where the passivation opening (9/36) and the final Cu
 # pad (41/36) overlap. Both feed the abstract attachment input.
+#
+# Wire-bond pads are the PDK's own pad derivation: the passivation opening
+# (9/0), dfpad (41/0) and TopMetal2 (134/0) together. Declared as a lambda over
+# a layout source so the ADK reads them from the carrier only, never from a
+# die layout that uses the same layers for its own pads.
 
 passiv_pillar = polygons(9, 35)
 dfpad_pillar  = polygons(41, 35)
@@ -14,3 +19,7 @@ passiv_sbump  = polygons(9, 36)
 dfpad_sbump   = polygons(41, 36)
 
 chiplet_attachment_input = passiv_pillar.and(dfpad_pillar).join(passiv_sbump.and(dfpad_sbump))
+
+wire_bond_pad_input = lambda do |src|
+  src.polygons(9, 0).and(src.polygons(41, 0)).and(src.polygons(134, 0))
+end

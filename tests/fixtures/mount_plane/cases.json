@@ -1,0 +1,50 @@
+{
+ "$comment": "Mount-plane cases (coord_frame_contract section 3.4). Each tool that computes z runs them in its own tests; the reference readers compute no z and do not. outcome is accept (nothing to seat), seat or refuse; warns says whether the tool warns about the file; dies gives each die's expected bottom z. In the first four no die names a connection, so a die computed by the rule sits on the plane itself. In the explicit_z cases each die names the file's 44 um connection stack and writes its z; a tool keeps it, and an exporter refuses a z other than the file's plane plus that height. A viewer may report that mismatch; warns is left out where the rule leaves it to the tool. Every interposer is 200 thick, so only the plane varies. stackup_plane is the plane the technology's stackup (case data) gives, which the file's value overrides.",
+ "cases": [
+  {
+   "file": "no_dies.chiplet",
+   "plane": null,
+   "exporter": {"outcome": "accept", "warns": false, "dies": {}},
+   "viewer": {"outcome": "accept", "warns": false, "dies": {}}
+  },
+  {
+   "file": "no_plane.chiplet",
+   "plane": null,
+   "exporter": {"outcome": "refuse"},
+   "viewer": {"outcome": "seat", "warns": true, "dies": {"U1": 200.0, "U2": 250.0}}
+  },
+  {
+   "file": "file_wins.chiplet",
+   "plane": 10.8103,
+   "exporter": {"outcome": "seat", "warns": false, "dies": {"U1": 10.8103, "U2": 10.8103}},
+   "viewer": {"outcome": "seat", "warns": false, "dies": {"U1": 10.8103, "U2": 10.8103}}
+  },
+  {
+   "file": "file_wins_off_stackup.chiplet",
+   "plane": 12.5,
+   "stackup_plane": 13.83,
+   "exporter": {"outcome": "seat", "warns": false, "dies": {"U1": 12.5, "U2": 12.5}},
+   "viewer": {"outcome": "seat", "warns": false, "dies": {"U1": 12.5, "U2": 12.5}}
+  },
+  {
+   "file": "explicit_z.chiplet",
+   "plane": 10.8103,
+   "exporter": {"outcome": "seat", "warns": false, "dies": {"U1": 54.8103, "U2": 54.8103}},
+   "viewer": {"outcome": "seat", "warns": false, "dies": {"U1": 54.8103, "U2": 54.8103}}
+  },
+  {
+   "file": "explicit_z_off_stackup.chiplet",
+   "plane": 12.5,
+   "stackup_plane": 13.83,
+   "exporter": {"outcome": "seat", "warns": false, "dies": {"U1": 56.5, "U2": 56.5}},
+   "viewer": {"outcome": "seat", "warns": false, "dies": {"U1": 56.5, "U2": 56.5}}
+  },
+  {
+   "file": "explicit_z_on_stackup_plane.chiplet",
+   "plane": 12.5,
+   "stackup_plane": 13.83,
+   "exporter": {"outcome": "refuse"},
+   "viewer": {"outcome": "seat", "dies": {"U1": 57.83, "U2": 57.83}}
+  }
+ ]
+}

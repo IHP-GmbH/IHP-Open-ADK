@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 IHP GmbH
+# Mount-plane case "explicit z, off-stackup": the synthetic interposer technology
+# whose stackup (case_stacked_interposer.stackup.yaml, case data) puts the plane at
+# 13.83, while this file declares 12.5. Both dies write their z as the file's plane
+# plus the 44 um stack, 56.5, so an exporter that holds the stackup still accepts
+# them against the file's plane. The numbers are case data, not a physical claim.
+# Expectations in cases.json.
+format_version: "1.0"
+assembly:
+  name: "mount_plane_explicit_z_off_stackup"
+  units: "um"
+technologies:
+  "case_stacked_interposer":
+    description: "Synthetic interposer technology, case data only"
+    stackup: "case_stacked_interposer.stackup.yaml"
+    dbu: 0.001
+  "case_die":
+    description: "Synthetic die technology, case data only"
+    dbu: 0.001
+connection_stacks:
+  "case_pillar":
+    description: "Synthetic pillar stack, case data only: 28 + 16 = 44 um"
+    layers:
+      - {name: "CasePillarCu", material: "Cu", height: 28.0, diameter: 40.0}
+      - {name: "CasePillarCap", material: "SnAg", height: 16.0, diameter: 40.0}
+components:
+  - id: "interposer"
+    type: interposer
+    technology: "case_stacked_interposer"
+    anchor: bbox_center
+    top_cell: "INTERPOSER"
+    position: {x: 2000.0, y: 1500.0, z: 0.0}
+    dimensions: {width: 4000.0, height: 3000.0, thickness: 200.0}
+    attachment_surface_z: 12.5
+  - id: "U1"
+    type: die
+    technology: "case_die"
+    anchor: gds_origin
+    connection: "case_pillar"
+    top_cell: "DIE_U1"
+    position: {x: 600.0, y: 1100.0, z: 56.5}
+    dimensions: {width: 800.0, height: 800.0, thickness: 300.0}
+  - id: "U2"
+    type: die
+    technology: "case_die"
+    anchor: gds_origin
+    connection: "case_pillar"
+    top_cell: "DIE_U2"
+    position: {x: 2600.0, y: 1100.0, z: 56.5}
+    dimensions: {width: 800.0, height: 800.0, thickness: 300.0}

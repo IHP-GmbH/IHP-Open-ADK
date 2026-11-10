@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 IHP GmbH
+# Mount-plane case "file wins, off-stackup": a synthetic interposer technology
+# whose stackup (case_stacked_interposer.stackup.yaml, case data) puts the plane at 13.83,
+# while this file declares 12.5. A tool that holds the stackup still seats the
+# dies on the file's 12.5. The numbers are case data, not a physical claim.
+# Expectations in cases.json.
+format_version: "1.0"
+assembly:
+  name: "mount_plane_file_wins_off_stackup"
+  units: "um"
+technologies:
+  "case_stacked_interposer":
+    description: "Synthetic interposer technology, case data only"
+    stackup: "case_stacked_interposer.stackup.yaml"
+    dbu: 0.001
+  "case_die":
+    description: "Synthetic die technology, case data only"
+    dbu: 0.001
+components:
+  - id: "interposer"
+    type: interposer
+    technology: "case_stacked_interposer"
+    anchor: bbox_center
+    top_cell: "INTERPOSER"
+    position: {x: 2000.0, y: 1500.0, z: 0.0}
+    dimensions: {width: 4000.0, height: 3000.0, thickness: 200.0}
+    attachment_surface_z: 12.5
+  - id: "U1"
+    type: die
+    technology: "case_die"
+    anchor: bbox_center
+    top_cell: "DIE_U1"
+    position: {x: 1000.0, y: 1500.0, z: 0.0}
+    dimensions: {width: 800.0, height: 800.0, thickness: 300.0}
+  - id: "U2"
+    type: die
+    technology: "case_die"
+    anchor: bbox_center
+    top_cell: "DIE_U2"
+    position: {x: 3000.0, y: 1500.0, z: 0.0}
+    dimensions: {width: 800.0, height: 800.0, thickness: 300.0}

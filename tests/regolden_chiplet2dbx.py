@@ -7,6 +7,7 @@ Run after an intentional output change, review the diff, commit together:
     python tests/regolden_chiplet2dbx.py
 """
 import sys
+import tempfile
 from pathlib import Path
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -15,7 +16,7 @@ sys.path.insert(0, str(TESTS_DIR.parent / "openroad"))
 
 import chiplet2dbx  # noqa: E402
 from test_chiplet2dbx import (  # noqa: E402
-    GOLDEN_DIR, base_assembly, bump_assembly, d1_pins)
+    GOLDEN_DIR, base_assembly, bump_assembly, d1_pins, export_views_fixture)
 
 
 def main() -> int:
@@ -35,6 +36,13 @@ def main() -> int:
         "chiplet2dbx_tech_route.lef.golden":
             chiplet2dbx.render_tech_lef(1000, "BUMP_ATTACH"),
     }
+    # The record fixture exports through files; its outputs name the record
+    # files relative to the out dir, so the temporary root does not show.
+    with tempfile.TemporaryDirectory() as tmp:
+        export_views_fixture(Path(tmp))
+        for name in ("views_demo.3dbv", "views_demo.3dbx", "DIE_F.bmap"):
+            targets["chiplet2dbx_%s.golden" % name] = (
+                Path(tmp) / "out" / name).read_text(encoding="utf-8")
     for name, text in targets.items():
         (GOLDEN_DIR / name).write_text(text, encoding="utf-8")
         print("wrote %s" % (GOLDEN_DIR / name))

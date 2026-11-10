@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 IHP GmbH
+#
+# Case data for file_wins_off_stackup.chiplet and the two explicit_z cases on the
+# same technology: a synthetic interposer stackup whose plane (13.83) differs from
+# the one those files declare (12.5). Not a physical technology.
+attachment_surface_z: 13.83
+
+Substrate:
+  index: 40
+  type: 0
+  z: -200.0
+  height: 200.0
+
+TopMetal:
+  index: 1
+  type: 0
+  z: 12.83
+  height: 1.0

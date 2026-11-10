@@ -18,7 +18,11 @@
 #     IXN.e.<method>), plus a conservative cross-method spacing check
 #     (IXN.x.<m1>.<m2>, max of the two spacings). Pads outside every
 #     method's region keep the adapter's assembly-global numbers
-#     (IXN.b.unclaimed / IXN.e.unclaimed) when an adapter is loaded.
+#     (IXN.b.unclaimed / IXN.e.unclaimed) when an adapter is loaded, and
+#     each named method is also checked against those unclaimed pads
+#     (IXN.x.<method>.unclaimed, max of the method's and the adapter's
+#     spacing). Without an adapter the unclaimed pads are reported as
+#     IXN.unassociated instead of being silently unchecked.
 #
 # interconnect_region defaults to chiplet_attachment_input; an adapter MAY
 # narrow it. The pitch->space conversion mirrors the interposer deck
@@ -105,8 +109,9 @@ if ixn_per_method
   end
 
   # Attachment pads outside every method's region: keep the assembly-global
-  # adapter numbers when an adapter is loaded; otherwise they are unchecked
-  # on this axis (say so).
+  # adapter numbers when an adapter is loaded, and check each named method
+  # against them; without an adapter they carry no rule at all and are
+  # reported as IXN.unassociated (a coverage finding, not a geometric one).
   ixn_claimed = ixn_method_regions.values.reduce { |a, b| a + b }
   ixn_unclaimed = ixn_region - ixn_claimed
   if ixn_has_adapter
@@ -124,8 +129,36 @@ if ixn_per_method
     ixn_e = ixn_unclaimed.space((ixn_pitch_value - ixn_pad_size).um - ixn_circle_tol, euclidian)
     ixn_e.output('IXN.e.unclaimed', "IXN.e.unclaimed : Min. attachment-point pitch is #{ixn_pitch_value} um (pads outside every method region)")
     ixn_e.forget
+
+    # Cross pair the intra-region checks never see: each named method's pads vs
+    # the pads outside every method region. IXN.b.<mid> sees only its own
+    # method's pads and IXN.b.unclaimed only unclaimed-vs-unclaimed, so a
+    # claimed pad too close to an unclaimed one was checked by nothing. Same
+    # stricter-of-two principle as IXN.x.<m1>.<m2>; the unclaimed side's rule
+    # is the adapter's (the number IXN.b.unclaimed already applies to it).
+    # Scope: taking the larger of the two spacings is this deck's
+    # compatibility convention for a pair of pads under unequal rules. It is
+    # not a manufacturing rule from either PDK; a real mixed-process spacing
+    # rule, if one exists, belongs in the adapter or the methods file.
+    ixn_method_ids.each do |mid|
+      ixn_xu_value = [ixn_per_method[mid]['IXN_spacing'].to_f, ixn_b_value].max
+      logger.info("ADK: IXN.x.#{mid}.unclaimed")
+      ixn_xu = ixn_method_regions[mid].separation(ixn_unclaimed,
+                                                  ixn_xu_value.um - ixn_circle_tol,
+                                                  euclidian)
+      ixn_xu.output("IXN.x.#{mid}.unclaimed", "IXN.x.#{mid}.unclaimed : Min. spacing between #{mid} pads and pads outside every method region is #{ixn_xu_value} um")
+      ixn_xu.forget
+    end
   else
-    logger.info('ADK: attachment pads outside every method region are not checked on the IXN axis (no assembly-level interconnect adapter)')
+    # No adapter: unclaimed pads carry no interconnect rule, so neither their
+    # own spacing nor their distance to any named method's pads can be
+    # verified. Report that as a finding rather than a log line, so a run
+    # cannot sign off clean on pads this axis never checked. It is a COVERAGE
+    # finding: the marker says the pad was not checked, not that it violates
+    # a spacing. No number is invented; there is no second value to take a
+    # maximum with.
+    logger.info('ADK: IXN.unassociated (attachment pads outside every method region have no interconnect adapter; IXN not verified for them)')
+    ixn_unclaimed.output('IXN.unassociated', 'IXN.unassociated : COVERAGE GAP, not a geometric violation: attachment pads outside every method region carry no interconnect rule (no assembly-level interconnect adapter); IXN spacing and pitch are NOT verified for them, including against named-method pads')
   end
   ixn_unclaimed.forget
   ixn_claimed.forget

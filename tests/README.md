@@ -51,6 +51,8 @@ expected. The in-image verify gate has the binary and runs everything.
 
 - `fixtures/test_interposer_adapter.drc`: synthetic adapter
   (`chiplet_attachment_input = polygons(999, 0)`) used by all KLayout tests.
+  `fixtures/test_wire_bond_adapter.drc` adds wire-bond pads on 998/0 for the
+  ASM.g tests.
 
 - `golden/assembly_rules.dru.golden`: byte-comparison baseline for the KiCad
   DRU generator. Regenerate with
@@ -58,7 +60,10 @@ expected. The in-image verify gate has the binary and runs everything.
 
 - `test_drc_regression.py`: runs the runner via subprocess against each fixture
   and asserts the expected ASM rule set (ASM.a overlap, ASM.b spacing, ASM.e min
-  area, ASM.f pad-outside). Also gates: manifest-native vs legacy-exchange0
+  area, ASM.f pad-outside, ASM.g die edge to wire-bond pad, with the die's own
+  pads pruned, a pad under a die and in a carrier subcell read, and a refusal
+  when a manifest die cell is not in the layout; ASM.g not applicable for an
+  adapter without wire-bond pads). Also gates: manifest-native vs legacy-exchange0
   equivalence (`test_legacy_and_manifest_modes_agree`), collision-proofness
   (manifest mode ignores chiplet-internal exchange0 geometry that legacy mode
   flags), loud aborts on a missing/unparseable/wrong-version manifest, abort
@@ -71,7 +76,12 @@ expected. The in-image verify gate has the binary and runs everything.
   geometry fails under `ihp_cupillar` and passes under `vendorx_microbump`.
   Per-method mode (`--interconnect-methods`) scopes each method's numbers to its
   dies' pads, applies a conservative cross-method spacing (IXN.x), and falls
-  back to the assembly-global adapter numbers for unclaimed pads.
+  back to the assembly-global adapter numbers for unclaimed pads. The
+  `IXN.x.<m>.unclaimed` block covers the named-vs-unclaimed pair the
+  intra-region checks never see: a claimed pad 20 um from an unclaimed one is
+  flagged at the stricter of method and adapter spacing, and with no adapter the
+  unclaimed pads are reported as `IXN.unassociated` instead of signing off
+  clean.
 
 - `test_boundaries_to_rdb.py`: the `boundaries_to_rdb` core that turns a
   boundary manifest into a KLayout `.lyrdb` marker database (shared by the

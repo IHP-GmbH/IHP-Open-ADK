@@ -153,12 +153,16 @@ end
 # Eval chain (single eval so all locals are shared across decks)
 #   1. layers_def.drc -- ADK chiplet_boundary layer (from the boundary manifest,
 #                        or the legacy exchange0 fab layer in compat mode)
-#   2. interposer adapter -- declares chiplet_attachment_input; MAY override drc_rules
+#   2. interposer adapter -- declares chiplet_attachment_input; MAY declare
+#                        wire_bond_pad_input; MAY override drc_rules
 #   3. <validation>   -- inline checks that every required interposer input was declared
-#   4. 8_1_assembly.drc -- the four ASM rules
+#   3a. wire_bond_pads.drc -- the adapter's wire-bond pads, read from the
+#                        carrier with every die cell pruned (or ASM.g not
+#                        applicable when the adapter declares none)
 #   -- the following two run ONLY when an interconnect adapter is loaded --
 #   2b. interconnect adapter -- sets interconnect_rules (IXN_*); MAY narrow interconnect_region
 #   3b. <validation>   -- inline checks that every required interconnect key was set
+#   4. 8_1_assembly.drc -- the ASM rules (ASM.a, b, e, f, g)
 #   5. 8_2_interconnect.drc -- the IXN pitch/spacing rules; appended when an
 #      interconnect adapter and/or a per-method file (ixn_methods) is loaded.
 #      With ixn_methods the checks scope per method over the dies' boundary
@@ -178,14 +182,15 @@ validation_code = required_inputs.map { |name|
   "unless defined?(#{name}) && !#{name}.nil?"
 }.join("\n")
 
-# Build the eval chain. The interposer-only branch is byte-identical to the
-# pre-interconnect deck: [layers_def, adapter, validation, 8_1_assembly]. The
+# Build the eval chain. The interposer-only branch is
+# [layers_def, adapter, validation, wire_bond_pads, 8_1_assembly]. The
 # interconnect adapter, its required-input validation, and 8_2_interconnect.drc
 # are appended ONLY when an interconnect adapter is loaded.
 parts = [
   File.read(File.join(rule_decks_dir, 'layers_def.drc')),
   File.read($adapter),
   validation_code,
+  File.read(File.join(rule_decks_dir, 'wire_bond_pads.drc')),
 ]
 
 if interconnect_adapter

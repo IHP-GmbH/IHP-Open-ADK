@@ -8,13 +8,18 @@
 #   * ASM.a (chiplet boundary overlap) -- enforced by KiCad's native
 #     courtyard collision check; no rule emitted here.
 #   * ASM.b (chiplet-to-chiplet spacing) -- emitted below.
-#   * ASM.e (chiplet minimum area) and ASM.f (attachment geometry inside
-#     chiplet) have no clean KiCad DRU equivalent and are enforced
-#     post-layout only by the ADK KLayout deck (adk/klayout/drc).
+#     Only die footprints (those with a GDS_FILE field) are held to it: a
+#     pad footprint drawn with a courtyard (a library or hand-drawn one; the
+#     flow's own pad footprints carry none) is not a chiplet.
+#   * ASM.e (chiplet minimum area), ASM.f (attachment geometry inside
+#     chiplet) and ASM.g (die edge to wire-bond pad) have no clean KiCad DRU
+#     equivalent and are enforced post-layout only by the ADK KLayout deck
+#     (adk/klayout/drc). ASM.g would need a courtyard on the pad, which the
+#     flow's wire-bond pad footprints do not carry.
 
 (rule "ASM.b - Chiplet min spacing"
-  (constraint courtyard_clearance (min {{ rules.ASM_b | num }}um))
-  (condition "A.Type == 'Footprint' && B.Type == 'Footprint'"))
+  (constraint courtyard_clearance (min {{ rules.ASM_b | mm }}))
+  (condition "A.Type == 'Footprint' && B.Type == 'Footprint' && A.getField('GDS_FILE') != '' && B.getField('GDS_FILE') != ''"))
 {% if interconnect_adapter_name -%}
 #
 # Interconnect axis: {{ interconnect_adapter_name }}

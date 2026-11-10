@@ -10,14 +10,14 @@
         "rules": {
             "type": "object",
             "patternProperties": {
-                "^[A-Z][A-Za-z0-9_]*$": { "type": "number" }
+                "^[A-Z][A-Za-z0-9_]*(?![\\s\\S])": { "type": "number" }
             },
             "additionalProperties": false
         },
         "rule_descriptions": {
             "type": "object",
             "patternProperties": {
-                "^[A-Z][A-Za-z0-9_]*$": { "type": "string" }
+                "^[A-Z][A-Za-z0-9_]*(?![\\s\\S])": { "type": "string" }
             },
             "additionalProperties": false
         }
