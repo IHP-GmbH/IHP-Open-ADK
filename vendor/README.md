@@ -7,7 +7,7 @@ the chiplet-spec repository (`reference/python/chiplet_format_io/__init__.py`).
 Same vendoring pattern the other ecosystem consumers use.
 
 Currently vendored: reader 1.22.0, from chiplet-spec dev
-at `e846129` (`vendor/chiplet_format_io/__init__.py` sha256 `256191bb...`),
+at `48a3052` (`vendor/chiplet_format_io/__init__.py` sha256 `256191bb...`),
 a public dev commit that carries reader release 1.22.0.
 
 Do not edit here. To update: copy the file from chiplet-spec verbatim, move the
