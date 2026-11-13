@@ -1958,7 +1958,7 @@ def test_live_views_top_is_read(tmp_path):
 # test_attachment_surface_z_gap_measured_against_surface. The chiplet2dbx
 # goldens are not evidence of it: their plane equals their body thickness.
 MOUNT_PLANE = Path(__file__).parent / "fixtures" / "mount_plane"
-MOUNT_PLANE_PIN = "9da50b2c4e31074792201b139743b93c3351e18d"
+MOUNT_PLANE_PIN = "6a627ad95b1557bbf0febd1b8228f236585ca250"
 MOUNT_PLANE_SPEC_DIR = "conformance/fixtures/mount_plane"
 _MOUNT_PLANE_CASES = json.loads((MOUNT_PLANE / "cases.json").read_text())["cases"]
 # What the exporter does with each case today, where cases.json alone does
