@@ -120,13 +120,19 @@ usage/validation errors. See `checks/README.md`.
 
 ```bash
 python openroad/chiplet2dbx.py --chiplet <design.chiplet> --out-dir build/3dblox \
-    [--pins U1=chiplets/die_a.pins.json ...] \
+    --contract U1=contracts/die_a [--pins U1=chiplets/die_a.pins.json] ... \
     [--views U2=views/u2/eda-views.json --contract U2=contracts/die_b ...] \
     [--corner <name>] [--top-verilog build/top.v]
 ```
 
 Produces `<name>.3dbv` (black-box ChipletDefs), `<name>.3dbx` (the placed
-assembly) and one minimal technology LEF per `.chiplet` technology. In
+assembly) and one minimal technology LEF per `.chiplet` technology. Every
+die exported without `--views` declares `anchor: gds_origin` and needs its die
+contract: its `die.bbox_um` places the outline around the die's GDS origin,
+which need not be the outline's centre. A die without one is refused.
+`--list-layouts` reads the `.chiplet`, prints the layout each `--contract` die
+without `--views` resolves to and exits without reading a layout or contract,
+so a container launcher knows what to mount. In
 OpenROAD, `read_3dbx <name>.3dbx` loads the assembly and runs the
 `check_3dblox` geometry linter. With per-die `--pins` lists (the
 `*.pins.json` artifact gds_to_kicad extracts from a die's GDS or footprint)
