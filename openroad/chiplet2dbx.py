@@ -32,13 +32,25 @@ per-method bump macro LEF rendered by the interconnect PDK's generator,
 discovered via INTERCONNECT_PDK_ROOT / sibling walk and required loudly when
 pins are supplied. Pin coordinates are die-local GDS micrometers (y-up,
 origin = GDS origin, the ``gds_origin`` anchor); the def-local position is
-``pin + dimensions/2``, mirrored in x for ``flip_chip`` dies because this
-ecosystem realizes the flip as a layout mirror while the target's flipped
-orientation leaves bump x/y unchanged. Because a bump map is a property of
+``pin - (x0, y0)`` against the die's GDS bbox [x0, y0, x1, y1], mirrored
+against x0/x1 for ``flip_chip`` dies because this ecosystem realizes the flip
+as a layout mirror while the target's flipped orientation leaves bump x/y
+unchanged. Because a bump map is a property of
 the ChipletDef (not of the instance), dies sharing artwork but differing in
 connection method or net binding split into separate defs. Bump port/net
 columns are emitted only when the `.chiplet` ``netlist:`` block binds the
 pad name to a net; otherwise ``-`` (the target warns on port-without-net).
+
+A ``gds_origin`` die's ``position`` places its GDS (0, 0), which need not be
+its outline's centre, so every die exported without an eda-views record needs
+its GDS bbox: the CLI reads it from the die contract given with ``--contract
+REF=DIR`` (its ``die.bbox_um``, in the die's own GDS frame, the contract bound
+to the die's top cell and layout bytes and, with ``--pins``, to that pin list),
+and the API takes it as ``die_boxes``. The outline is placed with its centre at
+the bbox centre, mirrored in x for ``flip_chip`` and turned by ``rotation.z``
+counter-clockwise about the origin; the box must span the declared dimensions
+to within ``DIE_BOX_TOLERANCE_DBU``. There is no fallback to centring the
+outline on the origin: a die without a box is refused.
 
 Optionally, per-die eda-views records (``--views INST=RECORD``, each with the
 die contract it is bound to, ``--contract INST=DIR``) export a die with its
@@ -66,13 +78,15 @@ Importable entry points:
     load_chiplet(path) -> dict            (vendored chiplet_format_io)
     load_pinlist(path) -> [{"name", "x_um", "y_um"}, ...]
     load_views(record, contract_dir, corner=None) -> dict
+    load_die_box(contract_dir, die, layout, pins_path=None) -> bbox_um
     render_3dbv(assembly, *, die_pins=None, die_views=None,
-                base_dir=None) -> str
+                base_dir=None, die_boxes=None) -> str
     render_3dbx(assembly, dbv_filename, *, die_pins=None, die_views=None,
-                top_verilog=None) -> str
+                top_verilog=None, die_boxes=None) -> str
     render_tech_lef(precision, route_layer=None) -> str
     export_3dblox(assembly, out_dir, name=None, die_pins=None,
-                  die_views=None, corner=None, top_verilog=None)
+                  die_views=None, corner=None, top_verilog=None,
+                  die_boxes=None)
         -> (dbv_path, dbx_path, [extra_paths])
 
 New options must be appended as trailing keyword arguments with defaults so
@@ -88,7 +102,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 ADK_ROOT = Path(__file__).resolve().parents[1]
 VENDOR_DIR = ADK_ROOT / "vendor"
@@ -121,6 +135,10 @@ VIEWS_PINS_FRAME = "die-local DEF frame, Y up; the flip-chip footprint mirrors X
 CONTRACT_FILE = "die-contract.json"
 CONTRACT_SCHEMA = "die-output-contract"
 CONTRACT_MAJOR = "1"
+CONTRACT_FRAME = "die_local_gds_origin"
+#: How far a gds_origin die's declared width or height may sit from its
+#: contract's bbox, in DBU of the assembly precision, before it is refused.
+DIE_BOX_TOLERANCE_DBU = 1
 #: Record kinds this exporter reads; the first three appear exactly once at
 #: the corner, the other two at least once. Every other kind is left alone.
 VIEWS_KINDS = ("def", "tech_lef", "pins", "lef", "liberty")
@@ -377,6 +395,107 @@ def _file_inside(root: Path, relative: Any, what: str) -> Path:
     return path
 
 
+def _read_contract(cdir: Path) -> Dict[str, Any]:
+    """The die contract in ``cdir``, refused unless it names its format."""
+    contract = _json_file(cdir / CONTRACT_FILE, "die contract")
+    version = contract.get("version")
+    if (contract.get("schema") != CONTRACT_SCHEMA or not isinstance(version, str)
+            or version.split(".")[0] != CONTRACT_MAJOR):
+        raise ExportError("%s is not a %s version %s.x file"
+                          % (cdir / CONTRACT_FILE, CONTRACT_SCHEMA, CONTRACT_MAJOR))
+    return contract
+
+
+def _contract_die(cdir: Path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """The die contract in ``cdir`` and its ``die`` mapping."""
+    contract = _read_contract(cdir)
+    return contract, _mapping(contract.get("die"),
+                              "the die of the contract in %s" % cdir)
+
+
+def _check_top_cell(cdie: Dict[str, Any], cdir: Path, top_cell: Any,
+                    who: str) -> None:
+    """Refuse unless the contract's top cell is ``top_cell``, the one
+    ``who`` names."""
+    stated = _text(cdie.get("top_cell"), "the top cell of the contract in %s" % cdir)
+    if stated != str(top_cell):
+        raise ExportError("%s names top cell %r, and the die contract in %s is "
+                          "%r" % (who, top_cell, cdir, stated))
+
+
+def load_die_box(contract_dir, die: Dict[str, Any], layout: Path,
+                 pins_path=None) -> Any:
+    """The die bbox of the die contract in ``contract_dir``, refused unless
+    the contract is the one of this die: same top cell, its layout digest is
+    the bytes of ``layout`` (the die's resolved ``layout:``), its frame is the
+    die's own GDS origin, and, when a pin list is given for the die, that
+    file is the bytes the contract's inventory binds. The box itself is
+    checked against the die's dimensions when the model is built."""
+    cdir = Path(contract_dir).resolve()
+    contract, cdie = _contract_die(cdir)
+    die_id = die.get("id")
+    if cdie.get("frame") != CONTRACT_FRAME:
+        raise ExportError("the die contract in %s states frame %r, not %r"
+                          % (cdir, cdie.get("frame"), CONTRACT_FRAME))
+    _check_top_cell(cdie, cdir, die.get("top_cell"), "die %r" % die_id)
+    if _sha256(layout) != _text(cdie.get("layout_sha256"),
+                                "the layout digest of the contract in %s" % cdir):
+        raise ExportError("die %r: its layout %s is not the bytes the die "
+                          "contract in %s binds" % (die_id, layout, cdir))
+    if pins_path is not None:
+        inventory = _mapping(contract.get("inventory"),
+                             "the inventory of the contract in %s" % cdir)
+        if inventory.get("kind") != "pins_json" \
+                or _sha256(Path(pins_path)) != inventory.get("sha256"):
+            raise ExportError("die %r: the pin list %s is not the one the die "
+                              "contract in %s binds" % (die_id, pins_path, cdir))
+    return cdie.get("bbox_um")
+
+
+def _load_die_boxes(assembly: Dict[str, Any], chiplet_path: Path,
+                    box_dirs: Dict[str, str], pin_paths: Dict[str, str]
+                    ) -> Dict[str, Any]:
+    """{ref: bbox} from the --contract of every die given one without
+    --views, its layout resolved as the .chiplet names it."""
+    dies = {str(c.get("id")): c for c in assembly.get("components") or []
+            if c.get("type") == "die"}
+    boxes = {}
+    for ref, layout in contract_layouts(assembly, chiplet_path,
+                                        box_dirs).items():
+        if not layout.is_file():
+            raise ExportError("die %r: its layout %s is not a file"
+                              % (ref, layout))
+        boxes[ref] = load_die_box(box_dirs[ref], dies[ref], layout,
+                                  pin_paths.get(ref))
+    return boxes
+
+
+def contract_layouts(assembly: Dict[str, Any], chiplet_path: Path,
+                     refs) -> Dict[str, Path]:
+    """{ref: layout} for each die in ``refs``, its ``layout:`` resolved as
+    the .chiplet names it (variables expanded, relative to the .chiplet's
+    directory). Nothing is read: a launcher asks for these paths to know what
+    to make visible before the export runs."""
+    dies = {str(c.get("id")): c for c in assembly.get("components") or []
+            if c.get("type") == "die"}
+    unknown = sorted(set(refs) - set(dies))
+    if unknown:
+        raise ExportError("--contract names %s, which the .chiplet has no die "
+                          "for" % ", ".join(unknown))
+    layouts = {}
+    for ref in sorted(refs):
+        ref_text = dies[ref].get("layout")
+        if not ref_text:
+            raise ExportError("die %r has no layout, so its die contract "
+                              "cannot be checked against it" % ref)
+        expanded = os.path.expandvars(str(ref_text))
+        if "$" in expanded:
+            raise ExportError("die %r: its layout %r names a variable that is "
+                              "not set" % (ref, ref_text))
+        layouts[ref] = (chiplet_path.parent / expanded).resolve()
+    return layouts
+
+
 def _bound_contract(doc: Dict[str, Any], record: Path, contract_dir,
                     pins_sha: str) -> List[Any]:
     """Refuse unless the record was written for the die contract in
@@ -384,13 +503,7 @@ def _bound_contract(doc: Dict[str, Any], record: Path, contract_dir,
     bound to, its top cell is the record's design and its pin list is the
     bytes the record's pins row binds. Returns the contract's die bbox."""
     cdir = Path(contract_dir).resolve()
-    contract = _json_file(cdir / CONTRACT_FILE, "die contract")
-    version = contract.get("version")
-    if (contract.get("schema") != CONTRACT_SCHEMA or not isinstance(version, str)
-            or version.split(".")[0] != CONTRACT_MAJOR):
-        raise ExportError("%s is not a %s version %s.x file"
-                          % (cdir / CONTRACT_FILE, CONTRACT_SCHEMA, CONTRACT_MAJOR))
-    die = _mapping(contract.get("die"), "the die of the contract in %s" % cdir)
+    contract, die = _contract_die(cdir)
     build = _mapping(contract.get("build_record"),
                      "the build record of the contract in %s" % cdir)
     inventory = _mapping(contract.get("inventory"),
@@ -412,11 +525,8 @@ def _bound_contract(doc: Dict[str, Any], record: Path, contract_dir,
             != build.get("sha256")):
         raise ExportError("%s is not bound to the layout and build record of %s"
                           % (record, cdir))
-    design = _text(doc.get("design"), "the design of %s" % record)
-    if design != _text(die.get("top_cell"),
-                       "the top cell of the contract in %s" % cdir):
-        raise ExportError("%s describes %s, and the contract in %s is %s"
-                          % (record, design, cdir, die.get("top_cell")))
+    _check_top_cell(die, cdir, _text(doc.get("design"), "the design of %s" % record),
+                    str(record))
     if pins_sha != inventory.get("sha256"):
         raise ExportError("the pin list of %s is not the one %s binds"
                           % (record, cdir))
@@ -708,20 +818,23 @@ def _bump_lef_generator():
 
 def _die_bump_rows(die: Dict[str, Any], pins: List[Dict[str, Any]],
                    width: float, height: float, flipped: bool,
-                   pin_nets: Dict[str, str]) -> List[Dict[str, Any]]:
+                   pin_nets: Dict[str, str],
+                   box: Sequence[float]) -> List[Dict[str, Any]]:
     """Transform die-local GDS pin centers into def-local bump rows.
 
-    Def-local frame is the outline rectangle (0,0)..(width,height) with the
-    die's geometric center at (width/2, height/2). ``flip_chip`` dies are
-    pre-mirrored in x: the ecosystem realizes the flip as a layout mirror,
-    while the target's flipped orientation keeps bump x/y unchanged.
+    Def-local frame is the outline rectangle (0,0)..(width,height), the die's
+    GDS bbox ``box`` = [x0, y0, x1, y1] with its lower-left corner at (0,0).
+    ``flip_chip`` dies are pre-mirrored in x against that box (x0 and x1 trade
+    places): the ecosystem realizes the flip as a layout mirror, while the
+    target's flipped orientation keeps bump x/y unchanged.
     """
+    x0, y0, x1, _ = box
     rows = []
     used_names: Dict[str, int] = {}
     outside = []
     for pin in pins:
-        x = width / 2.0 + (-pin["x_um"] if flipped else pin["x_um"])
-        y = height / 2.0 + pin["y_um"]
+        x = x1 - pin["x_um"] if flipped else pin["x_um"] - x0
+        y = pin["y_um"] - y0
         if not (0.0 <= x <= width and 0.0 <= y <= height):
             outside.append("%s at (%s, %s)" % (pin["name"], _fnum(x), _fnum(y)))
             continue
@@ -757,11 +870,12 @@ def _technology_of(comp: Dict[str, Any]) -> str:
 
 
 def _check_die_anchor(comp: Dict[str, Any], views: bool = False) -> None:
-    """Die bumps are exported die-local plus the die ``position`` (the
-    ``gds_origin`` anchor; see the module docstring). A die declaring
-    ``bbox_center`` would need its bumps re-centered on the die GDS bbox first,
-    which this exporter does not do, so it is a hard error rather than a silent
-    bbox-corner misplacement. An absent anchor is also a hard error: the frame
+    """A die exported as a black box is placed by its GDS origin (the
+    ``gds_origin`` anchor; see the module docstring): its ``position`` is the
+    GDS (0, 0), and its outline and bumps are taken against its GDS bbox. A
+    die declaring ``bbox_center`` would be placed by its outline centre, which
+    this path does not do, so it is a hard error rather than a silent
+    misplacement by the bbox centre's offset. An absent anchor is also a hard error: the frame
     contract (coord_frame_contract.md 2.2) defaults it to ``bbox_center``
     (unsupported here), so the die must declare ``anchor: gds_origin``
     explicitly (which every gds_to_kicad die and the plugin writer emit).
@@ -792,6 +906,57 @@ def _check_die_anchor(comp: Dict[str, Any], views: bool = False) -> None:
     raise ExportError(
         "die %r has unknown anchor %r (expected gds_origin or bbox_center)"
         % (comp.get("id"), anchor))
+
+
+def _die_box(die: Dict[str, Any], box, width: float, height: float,
+             precision: int) -> List[float]:
+    """The die's GDS bbox [x0, y0, x1, y1] in um, die-local to its GDS
+    origin, checked against the declared width and height in whole DBU.
+
+    A ``gds_origin`` die's ``position`` places its GDS (0, 0), which need not
+    be the outline's centre, so the outline is placed from this box. There is
+    no default: centring the outline on the origin is the defect this box
+    exists to prevent, so a die without one is refused."""
+    die_id = die.get("id")
+    if box is None:
+        raise ExportError(
+            "die %r declares anchor gds_origin, and its outline cannot be "
+            "placed without the die's GDS bbox; give its die contract with "
+            "--contract %s=DIR (the contract's die.bbox_um)" % (die_id, die_id))
+    try:
+        x0, y0, x1, y1 = (float(v) for v in box)
+    except (TypeError, ValueError):
+        raise ExportError("die %r: the bbox %r is not four numbers"
+                          % (die_id, box)) from None
+    if not all(math.isfinite(v) for v in (x0, y0, x1, y1)) or x1 <= x0 or y1 <= y0:
+        raise ExportError("die %r: the bbox %r is not [x_min, y_min, x_max, "
+                          "y_max] with x_min < x_max and y_min < y_max"
+                          % (die_id, box))
+    for what, declared, spanned in (("width", width, x1 - x0),
+                                    ("height", height, y1 - y0)):
+        if abs(round(declared * precision) - round(spanned * precision)) \
+                > DIE_BOX_TOLERANCE_DBU:
+            raise ExportError(
+                "die %r: dimensions.%s is %s um and its bbox spans %s um; they "
+                "must be the same outline (tolerance %d DBU at %d DBU/um)"
+                % (die_id, what, _fnum(declared), _fnum(spanned),
+                   DIE_BOX_TOLERANCE_DBU, precision))
+    return [x0, y0, x1, y1]
+
+
+def _anchor_offset(box: Sequence[float], flipped: bool,
+                   quarter: int) -> Tuple[float, float]:
+    """Where the placed outline's centre sits relative to the die's
+    ``position`` (its GDS origin): the bbox centre, mirrored in x for a
+    ``flip_chip`` die (the layout mirror about the GDS origin), then turned by
+    ``rotation.z`` counter-clockwise about the origin."""
+    cx = (box[0] + box[2]) / 2.0
+    cy = (box[1] + box[3]) / 2.0
+    if flipped:
+        cx = -cx
+    for _ in range(quarter // 90):
+        cx, cy = -cy, cx
+    return cx, cy
 
 
 class _Parts(NamedTuple):
@@ -919,11 +1084,16 @@ def _list_liberty(model: Dict[str, Any]) -> None:
 
 def _build_model(assembly: Dict[str, Any],
                  die_pins: Optional[Dict[str, List[Dict[str, Any]]]] = None,
-                 die_views: Optional[Dict[str, Dict[str, Any]]] = None
+                 die_views: Optional[Dict[str, Dict[str, Any]]] = None,
+                 die_boxes: Optional[Dict[str, Sequence[float]]] = None
                  ) -> Dict[str, Any]:
-    """Resolve the assembly into the def/instance/connection model."""
+    """Resolve the assembly into the def/instance/connection model.
+
+    ``die_boxes`` maps each die exported without an eda-views record to its
+    GDS bbox [x0, y0, x1, y1] in um, die-local to its GDS origin."""
     die_pins = die_pins or {}
     die_views = die_views or {}
+    die_boxes = die_boxes or {}
     units = (assembly.get("assembly") or {}).get("units")
     if units != SUPPORTED_UNITS:
         raise ExportError(
@@ -975,6 +1145,16 @@ def _build_model(assembly: Dict[str, Any],
         raise ExportError(
             "dies %s were given both a pin list and an eda-views record"
             % ", ".join(sorted(both)))
+    unknown_boxes = set(die_boxes) - {str(d.get("id")) for d in dies}
+    if unknown_boxes:
+        raise ExportError(
+            "die bboxes were supplied for unknown die refs: %s"
+            % ", ".join(sorted(unknown_boxes)))
+    boxed_views = set(die_boxes) & set(die_views)
+    if boxed_views:
+        raise ExportError(
+            "dies %s were given both a bbox and an eda-views record, whose "
+            "contract states the bbox" % ", ".join(sorted(boxed_views)))
 
     for die in dies:
         die_id = str(die["id"])
@@ -985,6 +1165,11 @@ def _build_model(assembly: Dict[str, Any],
         quarter = _rotation_quarter(die)
         orient = _orient_token(die, quarter)
         views = die_views.get(die_id)
+        if views:
+            # bbox_center: the outline's centre is the position.
+            box = [-width / 2.0, -height / 2.0, width / 2.0, height / 2.0]
+        else:
+            box = _die_box(die, die_boxes.get(die_id), width, height, precision)
 
         key = (
             str(die.get("layout")), str(die.get("top_cell")),
@@ -1012,8 +1197,8 @@ def _build_model(assembly: Dict[str, Any],
                     "bump map is keyed by method" % die_id)
             pin_nets = _die_pin_nets(assembly, die_id)
             rows = _die_bump_rows(die, die_pins[die_id], width, height,
-                                  orient.startswith("MZ"), pin_nets)
-            key = key + (method, tuple(sorted(pin_nets.items())))
+                                  orient.startswith("MZ"), pin_nets, box)
+            key = key + (method, tuple(sorted(pin_nets.items())), tuple(box))
             bump = {
                 "method": method,
                 "cell": _bump_macro_name(method),
@@ -1057,13 +1242,16 @@ def _build_model(assembly: Dict[str, Any],
             if views:
                 defs[def_name]["views"] = views
 
-        # A quarter turn swaps the placed footprint's x/y spans; the center
-        # stays the .chiplet position, so the corner uses the swapped spans.
+        # A quarter turn swaps the placed footprint's x/y spans. A record die
+        # (bbox_center) has its outline centre at the .chiplet position; a
+        # gds_origin die has its GDS origin there, and its outline centre sits
+        # at the bbox centre, mirrored and turned with the die.
         span_x, span_y = (height, width) if quarter in (90, 270) else (width, height)
+        dx, dy = _anchor_offset(box, orient.startswith("MZ"), quarter)
         instances.append({
             "name": die_id,
             "reference": def_name,
-            "loc": (x - span_x / 2.0, y - span_y / 2.0),
+            "loc": (x + dx - span_x / 2.0, y + dy - span_y / 2.0),
             "z": z,
             "orient": orient,
         })
@@ -1158,13 +1346,14 @@ def _view_path(path: Path, base_dir) -> str:
 def render_3dbv(assembly: Dict[str, Any], *,
                 die_pins: Optional[Dict[str, List[Dict[str, Any]]]] = None,
                 die_views: Optional[Dict[str, Dict[str, Any]]] = None,
-                base_dir=None) -> str:
+                base_dir=None,
+                die_boxes: Optional[Dict[str, Sequence[float]]] = None) -> str:
     """Render the ChipletDef (.3dbv) view of a finalized assembly dict.
 
     ``die_views`` maps die refs to :func:`load_views` results; their files are
     named relative to ``base_dir``, the directory the .3dbv is written to.
     """
-    model = _build_model(assembly, die_pins, die_views)
+    model = _build_model(assembly, die_pins, die_views, die_boxes)
     lines: List[str] = [
         "# Derived from %s.chiplet by chiplet2dbx (ADK); regenerate, do not edit."
         % model["name"],
@@ -1204,10 +1393,11 @@ def render_3dbv(assembly: Dict[str, Any], *,
 
 def render_bmap(assembly: Dict[str, Any], def_name: str, *,
                 die_pins: Optional[Dict[str, List[Dict[str, Any]]]] = None,
-                die_views: Optional[Dict[str, Dict[str, Any]]] = None
+                die_views: Optional[Dict[str, Dict[str, Any]]] = None,
+                die_boxes: Optional[Dict[str, Sequence[float]]] = None
                 ) -> str:
     """Render the bump map of one bump-aware or record ChipletDef."""
-    model = _build_model(assembly, die_pins, die_views)
+    model = _build_model(assembly, die_pins, die_views, die_boxes)
     entry = model["defs"].get(def_name)
     if entry is not None and entry.get("views"):
         views = entry["views"]
@@ -1272,13 +1462,14 @@ def render_tech_lef(precision: int, route_layer: Optional[str] = None) -> str:
 def render_3dbx(assembly: Dict[str, Any], dbv_filename: str, *,
                 die_pins: Optional[Dict[str, List[Dict[str, Any]]]] = None,
                 die_views: Optional[Dict[str, Dict[str, Any]]] = None,
-                top_verilog: Optional[str] = None) -> str:
+                top_verilog: Optional[str] = None,
+                die_boxes: Optional[Dict[str, Sequence[float]]] = None) -> str:
     """Render the assembly (.3dbx) view; includes ``dbv_filename``.
 
     ``top_verilog`` is written as the Design's verilog_file as given; the
     export checks the file against the records before naming it.
     """
-    model = _build_model(assembly, die_pins, die_views)
+    model = _build_model(assembly, die_pins, die_views, die_boxes)
     lines: List[str] = [
         "# Derived from %s.chiplet by chiplet2dbx (ADK); regenerate, do not edit."
         % model["name"],
@@ -1391,7 +1582,9 @@ def export_3dblox(assembly: Dict[str, Any], out_dir,
                   die_pins: Optional[Dict[str, Any]] = None,
                   die_views: Optional[Dict[str, Tuple[Any, Any]]] = None,
                   corner: Optional[str] = None,
-                  top_verilog=None) -> Tuple[Path, Path, List[Path]]:
+                  top_verilog=None,
+                  die_boxes: Optional[Dict[str, Sequence[float]]] = None
+                  ) -> Tuple[Path, Path, List[Path]]:
     """Write ``<name>.3dbv``/``.3dbx`` plus one tech LEF per technology.
 
     ``die_pins`` maps die refs to either a ``*.pins.json`` path or an
@@ -1404,11 +1597,16 @@ def export_3dblox(assembly: Dict[str, Any], out_dir,
     default the records' shared default corner). Those defs name the record's
     files in place and get a ``.bmap`` from its pins view. ``top_verilog`` is
     a system top named in the .3dbx once checked against the records.
+
+    ``die_boxes`` maps every die exported without a record (each declares
+    ``anchor: gds_origin``) to its GDS bbox [x0, y0, x1, y1] in um, die-local
+    to its GDS origin, as its die contract states it (:func:`load_die_box`).
+    The outline is placed from it; a die without one is refused.
     """
     parsed_pins = _parse_pins(die_pins)
     loaded_views = _load_die_views(die_views, corner, top_verilog)
     return _write_3dblox(assembly, out_dir, name, parsed_pins, loaded_views,
-                         top_verilog)
+                         top_verilog, die_boxes)
 
 
 def _parse_pins(die_pins) -> Dict[str, List[Dict[str, Any]]]:
@@ -1417,8 +1615,8 @@ def _parse_pins(die_pins) -> Dict[str, List[Dict[str, Any]]]:
 
 
 def _write_3dblox(assembly, out_dir, name, parsed_pins, loaded_views,
-                  top_verilog) -> Tuple[Path, Path, List[Path]]:
-    model = _build_model(assembly, parsed_pins, loaded_views)
+                  top_verilog, die_boxes=None) -> Tuple[Path, Path, List[Path]]:
+    model = _build_model(assembly, parsed_pins, loaded_views, die_boxes)
     out_dir = Path(out_dir)
     top_name = None
     if top_verilog is not None:
@@ -1430,12 +1628,14 @@ def _write_3dblox(assembly, out_dir, name, parsed_pins, loaded_views,
     dbv_path = out_dir / ("%s.3dbv" % base)
     dbx_path = out_dir / ("%s.3dbx" % base)
     dbv_path.write_text(render_3dbv(assembly, die_pins=parsed_pins,
-                                    die_views=loaded_views, base_dir=out_dir),
+                                    die_views=loaded_views, base_dir=out_dir,
+                                    die_boxes=die_boxes),
                         encoding="utf-8")
     dbx_path.write_text(render_3dbx(assembly, dbv_path.name,
                                     die_pins=parsed_pins,
                                     die_views=loaded_views,
-                                    top_verilog=top_name), encoding="utf-8")
+                                    top_verilog=top_name,
+                                    die_boxes=die_boxes), encoding="utf-8")
     extra_paths = []
 
     bump_defs = {n: d for n, d in model["defs"].items() if d.get("bump")}
@@ -1445,7 +1645,7 @@ def _write_3dblox(assembly, out_dir, name, parsed_pins, loaded_views,
         bmap_path = out_dir / model["defs"][def_name]["bmap"]
         bmap_path.write_text(
             render_bmap(assembly, def_name, die_pins=parsed_pins,
-                        die_views=loaded_views),
+                        die_views=loaded_views, die_boxes=die_boxes),
             encoding="utf-8")
         extra_paths.append(bmap_path)
     for lef_name, method in sorted({
@@ -1499,7 +1699,9 @@ def parse_args(argv=None):
                "  python openroad/chiplet2dbx.py --chiplet demo.chiplet "
                "--out-dir build/3dblox \\\n"
                "      --pins U1=chiplets/die_a.pins.json "
-               "--pins U2=chiplets/die_b.pins.json\n"
+               "--contract U1=contracts/die_a \\\n"
+               "      --pins U2=chiplets/die_b.pins.json "
+               "--contract U2=contracts/die_b\n"
                "  python openroad/chiplet2dbx.py --chiplet demo.chiplet "
                "--out-dir build/3dblox \\\n"
                "      --views U1=views/u1/eda-views.json "
@@ -1523,8 +1725,14 @@ def parse_args(argv=None):
                              "views and needs --contract for the same REF")
     parser.add_argument("--contract", action="append", default=[],
                         metavar="REF=DIR",
-                        help="the die contract directory the --views record "
-                             "of REF must be bound to")
+                        help="the die contract directory of REF: required "
+                             "for every die without --views (its die.bbox_um "
+                             "places the outline of a gds_origin die), and the "
+                             "contract the --views record of REF is bound to")
+    parser.add_argument("--list-layouts", action="store_true",
+                        help="print the resolved layout of each die given a "
+                             "--contract without --views, one path per line, "
+                             "and exit without reading or writing anything")
     parser.add_argument("--corner", default=None,
                         help="corner to read the records at (default: their "
                              "shared default corner)")
@@ -1548,15 +1756,18 @@ def _parse_ref_args(specs: List[str], option: str = "--pins"
 
 
 def _parse_views_args(views: List[str], contracts: List[str]
-                      ) -> Dict[str, Tuple[str, str]]:
+                      ) -> Tuple[Dict[str, Tuple[str, str]], Dict[str, str]]:
+    """({ref: (record, contract dir)} for --views, {ref: contract dir} for
+    every --contract without a --views)."""
     records = _parse_ref_args(views, "--views")
     dirs = _parse_ref_args(contracts, "--contract")
-    if set(records) != set(dirs):
+    unpaired = set(records) - set(dirs)
+    if unpaired:
         raise ExportError(
-            "each --views needs a --contract for the same ref, and each "
-            "--contract a --views; unpaired: %s"
-            % ", ".join(sorted(set(records) ^ set(dirs))))
-    return {ref: (records[ref], dirs[ref]) for ref in records}
+            "each --views needs a --contract for the same ref; without one: %s"
+            % ", ".join(sorted(unpaired)))
+    return ({ref: (records[ref], dirs[ref]) for ref in records},
+            {ref: d for ref, d in dirs.items() if ref not in records})
 
 
 def main(argv=None) -> int:
@@ -1565,13 +1776,21 @@ def main(argv=None) -> int:
     try:
         assembly = load_chiplet(chiplet_path)
         out_dir = Path(args.out_dir) if args.out_dir else chiplet_path.parent
-        die_pins = _parse_pins(_parse_ref_args(args.pins))
-        loaded_views = _load_die_views(
-            _parse_views_args(args.views, args.contract), args.corner,
-            args.top_verilog)
+        pin_paths = _parse_ref_args(args.pins)
+        views_args, box_dirs = _parse_views_args(args.views, args.contract)
+        if args.list_layouts:
+            for layout in contract_layouts(assembly, chiplet_path,
+                                           box_dirs).values():
+                print(layout)
+            return 0
+        die_pins = _parse_pins(pin_paths)
+        loaded_views = _load_die_views(views_args, args.corner,
+                                       args.top_verilog)
+        die_boxes = _load_die_boxes(assembly, chiplet_path, box_dirs,
+                                    pin_paths)
         dbv_path, dbx_path, extra_paths = _write_3dblox(
             assembly, out_dir, args.name, die_pins, loaded_views,
-            args.top_verilog)
+            args.top_verilog, die_boxes)
     except (cfio.ChipletFormatError, ExportError, OSError) as exc:
         print("chiplet2dbx: error: %s" % exc, file=sys.stderr)
         return 1

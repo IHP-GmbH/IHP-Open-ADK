@@ -4,6 +4,25 @@ All notable changes to the ADK are recorded here. Versions track the adapter
 contract; the `VERSION` file and the `version` keys in `config/*.json` should
 match the latest released entry.
 
+## Unreleased
+
+- `openroad/chiplet2dbx.py` places a `gds_origin` die by its anchor. It used
+  to put the outline's centre at the die's `position`, which holds only when
+  the GDS origin is the outline's centre: Metal_Test.gds is 31.202 um off in
+  y, and a corner-origin die was off by half its size. The outline is now
+  placed from the die contract's `die.bbox_um` (`--contract REF=DIR` without
+  `--views`; `die_boxes=` in the API), and the bump map is taken against the
+  same box, mirrored against x0/x1 for `flip_chip`. The contract must be the
+  die's (top cell, layout bytes, frame, and the `--pins` file when given), and
+  the box must span the declared dimensions within one DBU. A `gds_origin` die
+  without a contract is refused; there is no fallback to centring.
+  `--list-layouts` prints the layouts those contracts are checked against,
+  resolved as the `.chiplet` names them, for a launcher to mount.
+- BREAKING: `chiplet2dbx.py` refuses a `gds_origin` die exported without
+  `--views` unless `--contract REF=DIR` gives its die contract (in the API,
+  `die_boxes=`). A command line or caller that exported such a die before
+  now stops with an error naming the die and the option to add.
+
 ## 0.3.0 - 2026-11-06
 
 The assembly rules change verdicts: `ASM.b` moves from 50 to 200 um, and a new

@@ -1340,7 +1340,12 @@ def test_chiplet_consumers_read_the_emitted_file(tmp_path, registry_env):
     assembly = chiplet2dbx.load_chiplet(result.outputs["chiplet"])
     outdir = tmp_path / "dbx"
     outdir.mkdir()
-    chiplet2dbx.export_3dblox(assembly, outdir)
+    # This world writes no die contracts; the box only places the outline,
+    # and the consumer reading the emitted file is what is checked here.
+    boxes = {str(c["id"]): [-c["dimensions"]["width"] / 2, -c["dimensions"]["height"] / 2,
+                            c["dimensions"]["width"] / 2, c["dimensions"]["height"] / 2]
+             for c in assembly["components"] if c["type"] == "die"}
+    chiplet2dbx.export_3dblox(assembly, outdir, die_boxes=boxes)
     assert any(outdir.iterdir())
     rc = pvp.main(["--chiplet", str(result.outputs["chiplet"]), "--pillars", str(result.outputs["pillars"]),
                    "--gds-pads", "U1", "--gds-pads", "U2", "--strict"])

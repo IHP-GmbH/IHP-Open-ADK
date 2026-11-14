@@ -50,6 +50,23 @@ REGOLDEN_HINT = (
 )
 
 
+
+def centred(assembly):
+    """Each gds_origin die's bbox centred on its GDS origin, the frame every
+    unit assembly here was written in; it reproduces the outputs from before
+    the exporter placed dies by their bbox. A bbox_center die is exported with
+    its record, whose contract states its bbox, so it is given none."""
+    boxes = {}
+    for comp in assembly.get("components") or []:
+        dims = comp.get("dimensions") or {}
+        try:
+            w, h = float(dims["width"]) / 2.0, float(dims["height"]) / 2.0
+        except (KeyError, TypeError, ValueError):
+            continue
+        if comp.get("type") == "die" and comp.get("anchor") != "bbox_center":
+            boxes[str(comp.get("id"))] = [-w, -h, w, h]
+    return boxes
+
 def base_assembly():
     """Small two-die assembly exercising def dedup inputs and two stacks."""
     return {
@@ -240,6 +257,29 @@ def _views_def(design, width, height, pads) -> str:
     return "\n".join(lines) + "\n"
 
 
+def write_box_contract(root: Path, assembly, ref, box, pins_path=None,
+                       **die_fields) -> Path:
+    """Write the layout the .chiplet names for die ``ref`` (under ``root``,
+    the .chiplet's directory) and a die contract binding it with ``box``;
+    returns the contract directory."""
+    die = next(c for c in assembly["components"] if c["id"] == ref)
+    layout = root / die["layout"]
+    layout.write_bytes(b"layout " + die["top_cell"].encode())
+    contract = root / "box-contracts" / ref
+    contract.mkdir(parents=True)
+    fields = {"name": die["top_cell"], "layout": die["layout"],
+              "layout_sha256": _sha(layout), "top_cell": die["top_cell"],
+              "dbu_um": 0.001, "bbox_um": box, "frame": "die_local_gds_origin"}
+    fields.update(die_fields)
+    inventory = {"kind": "pins_json", "path": "pins.json", "sha256": "0" * 64}
+    if pins_path is not None:
+        inventory["sha256"] = _sha(Path(pins_path))
+    (contract / "die-contract.json").write_text(json.dumps({
+        "schema": "die-output-contract", "version": "1.1", "die": fields,
+        "inventory": inventory}, indent=2) + "\n")
+    return contract
+
+
 def write_views_fixture(root: Path):
     """Write both records and contracts under ``root``; returns the
     ``die_views`` map {ref: (record, contract_dir)}."""
@@ -351,12 +391,12 @@ def export_views_fixture(root: Path, **kwargs):
 
 def test_render_3dbv_golden():
     golden = (GOLDEN_DIR / "chiplet2dbx_unit_demo.3dbv.golden").read_text()
-    assert chiplet2dbx.render_3dbv(base_assembly()) == golden, REGOLDEN_HINT
+    assert chiplet2dbx.render_3dbv(base_assembly(), die_boxes=centred(base_assembly())) == golden, REGOLDEN_HINT
 
 
 def test_render_3dbx_golden():
     golden = (GOLDEN_DIR / "chiplet2dbx_unit_demo.3dbx.golden").read_text()
-    rendered = chiplet2dbx.render_3dbx(base_assembly(), "unit_demo.3dbv")
+    rendered = chiplet2dbx.render_3dbx(base_assembly(), "unit_demo.3dbv", die_boxes=centred(base_assembly()))
     assert rendered == golden, REGOLDEN_HINT
 
 
@@ -368,14 +408,14 @@ def test_render_tech_lef_golden():
 def test_render_3dbv_bumps_golden():
     golden = (GOLDEN_DIR / "chiplet2dbx_unit_demo_bumps.3dbv.golden").read_text()
     rendered = chiplet2dbx.render_3dbv(bump_assembly(),
-                                       die_pins={"D1": d1_pins()})
+                                       die_pins={"D1": d1_pins()}, die_boxes=centred(bump_assembly()))
     assert rendered == golden, REGOLDEN_HINT
 
 
 def test_render_bmap_golden():
     golden = (GOLDEN_DIR / "chiplet2dbx_unit_demo.bmap.golden").read_text()
     rendered = chiplet2dbx.render_bmap(bump_assembly(), "DIE_A__bump25",
-                                       die_pins={"D1": d1_pins()})
+                                       die_pins={"D1": d1_pins()}, die_boxes=centred(bump_assembly()))
     assert rendered == golden, REGOLDEN_HINT
 
 
@@ -388,7 +428,7 @@ def test_render_tech_lef_route_layer_golden():
 # ------------------------------------------------------------- semantics
 
 def test_center_to_corner_conversion():
-    text = chiplet2dbx.render_3dbx(base_assembly(), "unit_demo.3dbv")
+    text = chiplet2dbx.render_3dbx(base_assembly(), "unit_demo.3dbv", die_boxes=centred(base_assembly()))
     # interposer center (500,400) with 1000x800 outline -> corner (0,0)
     assert "loc: [0, 0]" in text
     # D1 center (250,300), 300x200 -> corner (100, 200)
@@ -402,9 +442,9 @@ def test_die_def_dedup_same_source():
     clone["id"] = "D3"
     clone["position"] = {"x": 250.0, "y": 650.0, "z": 35.0}
     assembly["components"].append(clone)
-    dbv = chiplet2dbx.render_3dbv(assembly)
+    dbv = chiplet2dbx.render_3dbv(assembly, die_boxes=centred(assembly))
     assert dbv.count("  DIE_A:") == 1
-    dbx = chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
+    dbx = chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv", die_boxes=centred(assembly))
     assert dbx.count("reference: DIE_A") == 2
 
 
@@ -416,7 +456,7 @@ def test_die_def_name_collision_gets_suffix():
     clone["layout"] = "other.gds"  # same top_cell, different source
     clone["position"] = {"x": 250.0, "y": 650.0, "z": 35.0}
     assembly["components"].append(clone)
-    dbv = chiplet2dbx.render_3dbv(assembly)
+    dbv = chiplet2dbx.render_3dbv(assembly, die_boxes=centred(assembly))
     assert "  DIE_A:" in dbv
     assert "  DIE_A_2:" in dbv
 
@@ -426,14 +466,14 @@ def test_orient_composition():
     d1 = assembly["components"][1]
 
     d1["rotation"]["z"] = 90.0
-    text = chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
+    text = chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv", die_boxes=centred(assembly))
     assert "orient: MZ_R90" in text
     # quarter turn swaps spans: 300x200 die centered at (250,300)
     # -> corner (250-100, 300-150) = (150, 150)
     assert "loc: [150, 150]" in text
 
     d1["orientation"] = "face_up"
-    text = chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
+    text = chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv", die_boxes=centred(assembly))
     assert "orient: R90" in text
     # face_up dies attach through their back region
     assert "top: D1.regions.back" in text
@@ -443,14 +483,14 @@ def test_non_90_rotation_fails():
     assembly = base_assembly()
     assembly["components"][1]["rotation"]["z"] = 45.0
     with pytest.raises(ExportError, match="multiples"):
-        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
+        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv", die_boxes=centred(assembly))
 
 
 def test_face_down_fails():
     assembly = base_assembly()
     assembly["components"][1]["orientation"] = "face_down"
     with pytest.raises(ExportError, match="flip_chip"):
-        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
+        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv", die_boxes=centred(assembly))
 
 
 def test_die_anchor_bbox_center_fails():
@@ -459,14 +499,14 @@ def test_die_anchor_bbox_center_fails():
     assembly = base_assembly()
     assembly["components"][1]["anchor"] = "bbox_center"
     with pytest.raises(ExportError, match="bbox_center"):
-        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
+        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv", die_boxes=centred(assembly))
 
 
 def test_die_anchor_gds_origin_ok():
     """Explicit gds_origin exports normally (base_assembly dies declare it)."""
     assembly = base_assembly()
     assembly["components"][1]["anchor"] = "gds_origin"
-    chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
+    chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv", die_boxes=centred(assembly))
 
 
 def test_die_anchor_absent_fails():
@@ -475,7 +515,7 @@ def test_die_anchor_absent_fails():
     assembly = base_assembly()
     del assembly["components"][1]["anchor"]
     with pytest.raises(ExportError, match="anchor"):
-        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
+        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv", die_boxes=centred(assembly))
 
 
 @pytest.mark.parametrize("rot", ["90deg", None, [0, 0, 90]])
@@ -487,56 +527,56 @@ def test_malformed_rotation_is_export_error(rot):
     assembly["components"][1]["rotation"] = (
         rot if isinstance(rot, list) else {"z": rot})
     with pytest.raises(ExportError, match="rotation"):
-        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
+        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv", die_boxes=centred(assembly))
 
 
 def test_z_gap_mismatch_fails():
     assembly = base_assembly()
     assembly["components"][1]["position"]["z"] = 36.0
     with pytest.raises(ExportError, match="z gap"):
-        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
+        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv", die_boxes=centred(assembly))
 
 
 def test_unresolvable_connection_fails():
     assembly = base_assembly()
     assembly["components"][1]["connection"] = "nope"
     with pytest.raises(ExportError, match="does not resolve"):
-        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
+        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv", die_boxes=centred(assembly))
 
 
 def test_missing_connection_fails():
     assembly = base_assembly()
     del assembly["components"][1]["connection"]
     with pytest.raises(ExportError, match="no connection stack"):
-        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
+        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv", die_boxes=centred(assembly))
 
 
 def test_zero_thickness_die_fails_pointing_at_producer():
     assembly = base_assembly()
     assembly["components"][1]["dimensions"]["thickness"] = 0.0
     with pytest.raises(ExportError, match="DIE_THICKNESS_UM"):
-        chiplet2dbx.render_3dbv(assembly)
+        chiplet2dbx.render_3dbv(assembly, die_boxes=centred(assembly))
 
 
 def test_non_um_units_fail():
     assembly = base_assembly()
     assembly["assembly"]["units"] = "mm"
     with pytest.raises(ExportError, match="units"):
-        chiplet2dbx.render_3dbv(assembly)
+        chiplet2dbx.render_3dbv(assembly, die_boxes=centred(assembly))
 
 
 def test_inconsistent_dbu_fails():
     assembly = base_assembly()
     assembly["technologies"]["techb"]["dbu"] = 0.002
     with pytest.raises(ExportError, match="dbu"):
-        chiplet2dbx.render_3dbv(assembly)
+        chiplet2dbx.render_3dbv(assembly, die_boxes=centred(assembly))
 
 
 def test_interposer_count_enforced():
     assembly = base_assembly()
     assembly["components"].append(copy.deepcopy(assembly["components"][0]))
     with pytest.raises(ExportError, match="exactly one interposer"):
-        chiplet2dbx.render_3dbv(assembly)
+        chiplet2dbx.render_3dbv(assembly, die_boxes=centred(assembly))
 
 
 # ------------------------------------------------- attachment surface split
@@ -547,9 +587,9 @@ def test_attachment_surface_z_drives_mount_and_substrate():
     assembly = attach_surface_assembly()
     # Mount surface = attachment_surface_z, so the die z-gap check passes and
     # the export runs end to end.
-    dbx = chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
+    dbx = chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv", die_boxes=centred(assembly))
     assert "reference: DIE_A" in dbx
-    dbv = chiplet2dbx.render_3dbv(assembly)
+    dbv = chiplet2dbx.render_3dbv(assembly, die_boxes=centred(assembly))
     # The substrate is a thin mount plane = 13.83, NOT the 300 um body.
     assert "thickness: 13.83\n" in dbv
     assert "thickness: 300" not in dbv
@@ -560,7 +600,7 @@ def test_attachment_surface_z_gap_measured_against_surface():
     assembly = attach_surface_assembly()
     assembly["components"][1]["position"]["z"] = 13.83 + 25.0 + 1.0  # off by 1 um
     with pytest.raises(ExportError, match="z gap"):
-        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv")
+        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv", die_boxes=centred(assembly))
 
 
 def test_no_attachment_surface_z_is_refused_naming_the_interposer():
@@ -597,14 +637,14 @@ def test_non_positive_attachment_surface_z_fails():
     assembly = attach_surface_assembly()
     assembly["components"][0]["attachment_surface_z"] = 0.0
     with pytest.raises(ExportError, match="attachment_surface_z"):
-        chiplet2dbx.render_3dbv(assembly)
+        chiplet2dbx.render_3dbv(assembly, die_boxes=centred(assembly))
 
 
 # ----------------------------------------------------------- bump maps
 
 def test_bump_rows_mirror_and_bind():
     text = chiplet2dbx.render_bmap(bump_assembly(), "DIE_A__bump25",
-                                   die_pins={"D1": d1_pins()})
+                                   die_pins={"D1": d1_pins()}, die_boxes=centred(bump_assembly()))
     # flip_chip pre-mirrors x: pin (-100,-50) on a 300x200 die -> (250, 50);
     # the duplicate name gets a suffix.
     assert "A0 BUMP_BUMP25 250 50 - -" in text
@@ -617,7 +657,7 @@ def test_bump_rows_face_up_not_mirrored():
     assembly = bump_assembly()
     assembly["components"][1]["orientation"] = "face_up"
     text = chiplet2dbx.render_bmap(assembly, "DIE_A__bump25",
-                                   die_pins={"D1": d1_pins()})
+                                   die_pins={"D1": d1_pins()}, die_boxes=centred(assembly))
     assert "A0 BUMP_BUMP25 50 50 - -" in text
 
 
@@ -629,7 +669,7 @@ def test_def_splits_by_method_with_pins():
     clone["position"] = {"x": 250.0, "y": 650.0, "z": 50.0}
     assembly["components"].append(clone)
     pins = {"D1": d1_pins(), "D3": d1_pins()}
-    dbv = chiplet2dbx.render_3dbv(assembly, die_pins=pins)
+    dbv = chiplet2dbx.render_3dbv(assembly, die_pins=pins, die_boxes=centred(assembly))
     assert "  DIE_A__bump25:" in dbv
     assert "  DIE_A__bump40:" in dbv
     assert "LEF_file: [bump25__techb.lef]" in dbv
@@ -647,26 +687,32 @@ def test_shared_def_requires_identical_pins():
     other[0]["x_um"] = -90.0
     with pytest.raises(ExportError, match="different pin lists"):
         chiplet2dbx.render_3dbv(
-            assembly, die_pins={"D1": d1_pins(), "D3": other})
+            assembly, die_pins={"D1": d1_pins(), "D3": other}, die_boxes=centred(assembly))
 
 
 def test_pin_outside_outline_fails():
     pins = d1_pins()
     pins.append({"name": "FAR", "x_um": 400.0, "y_um": 0.0})
     with pytest.raises(ExportError, match="FAR"):
-        chiplet2dbx.render_3dbv(bump_assembly(), die_pins={"D1": pins})
+        chiplet2dbx.render_3dbv(bump_assembly(), die_pins={"D1": pins}, die_boxes=centred(bump_assembly()))
 
 
 def test_pins_for_unknown_ref_fail():
     with pytest.raises(ExportError, match="unknown die refs"):
-        chiplet2dbx.render_3dbv(bump_assembly(), die_pins={"D9": d1_pins()})
+        chiplet2dbx.render_3dbv(bump_assembly(), die_pins={"D9": d1_pins()}, die_boxes=centred(bump_assembly()))
+
+
+def test_a_bbox_for_an_unknown_ref_fails():
+    boxes = dict(centred(bump_assembly()), D9=[-1.0, -1.0, 1.0, 1.0])
+    with pytest.raises(ExportError, match="die bboxes were supplied for unknown die refs: D9"):
+        chiplet2dbx.render_3dbv(bump_assembly(), die_boxes=boxes)
 
 
 def test_pins_without_connection_fail():
     assembly = bump_assembly()
     del assembly["components"][1]["connection"]
     with pytest.raises(ExportError, match="no connection method"):
-        chiplet2dbx.render_3dbv(assembly, die_pins={"D1": d1_pins()})
+        chiplet2dbx.render_3dbv(assembly, die_pins={"D1": d1_pins()}, die_boxes=centred(assembly))
 
 
 def test_macro_naming_matches_generator():
@@ -786,14 +832,14 @@ def test_views_corner(tmp_path):
                lambda doc: doc.update(default_corner="slow"))
     with pytest.raises(ExportError, match="name one with --corner"):
         chiplet2dbx.export_3dblox(views_assembly(), tmp_path / "out",
-                                  die_views=die_views)
+                                  die_views=die_views, die_boxes=centred(views_assembly()))
     dbv, _, _ = chiplet2dbx.export_3dblox(
         views_assembly(), tmp_path / "out", die_views=die_views,
-        corner="slow")
+        corner="slow", die_boxes=centred(views_assembly()))
     assert "liberty_file: [../records/U1/liberty/fix_slow.lib]" in dbv.read_text()
     with pytest.raises(ExportError, match="has no corner 'fast'"):
         chiplet2dbx.export_3dblox(views_assembly(), tmp_path / "out",
-                                  die_views=die_views, corner="fast")
+                                  die_views=die_views, corner="fast", die_boxes=centred(views_assembly()))
 
 
 def test_views_options_need_a_record(tmp_path):
@@ -802,7 +848,7 @@ def test_views_options_need_a_record(tmp_path):
             chiplet2dbx.export_3dblox(base_assembly(), tmp_path, **kwargs)
     with pytest.raises(ExportError, match="pair"):
         chiplet2dbx.export_3dblox(views_assembly(), tmp_path,
-                                  die_views={"U1": "eda-views.json"})
+                                  die_views={"U1": "eda-views.json"}, die_boxes=centred(views_assembly()))
 
 
 def test_views_path_must_be_plain(tmp_path):
@@ -1102,12 +1148,20 @@ def test_views_lines(tmp_path):
 def test_views_record_describes_the_contract_design(tmp_path):
     die_views = write_views_fixture(tmp_path)
     _edit_json(die_views["U1"][0], lambda doc: doc.update(design="DIE_X"))
-    with pytest.raises(ExportError, match="describes DIE_X"):
+    with pytest.raises(ExportError, match="names top cell .DIE_X."):
         _loaded(die_views)
 
 
+def test_a_record_die_given_a_bbox_too_is_refused(tmp_path):
+    loaded = _loaded(write_views_fixture(tmp_path))
+    assembly = views_assembly()
+    boxes = dict(centred(assembly), U1=[-1.0, -1.0, 1.0, 1.0])
+    with pytest.raises(ExportError, match="dies U1 were given both a bbox and an eda-views record"):
+        chiplet2dbx.render_3dbv(assembly, die_views=loaded, die_boxes=boxes)
+
+
 def _rendered(assembly, loaded):
-    return chiplet2dbx.render_3dbv(assembly, die_views=loaded)
+    return chiplet2dbx.render_3dbv(assembly, die_views=loaded, die_boxes=centred(assembly))
 
 
 def test_views_die_checks(tmp_path):
@@ -1130,7 +1184,7 @@ def test_views_die_checks(tmp_path):
         _rendered(assembly, loaded)
     with pytest.raises(ExportError, match="both a pin list and"):
         chiplet2dbx.render_3dbv(views_assembly(), die_views=loaded,
-                                die_pins={"U1": d1_pins()})
+                                die_pins={"U1": d1_pins()}, die_boxes=centred(views_assembly()))
     with pytest.raises(ExportError, match="unknown die refs: U9"):
         _rendered(views_assembly(), dict(loaded, U9=loaded["U1"]))
 
@@ -1208,13 +1262,18 @@ def test_top_verilog_needs_a_die(tmp_path):
 
 def test_cli_roundtrip(tmp_path):
     chiplet = tmp_path / "unit_demo.chiplet"
-    chiplet2dbx.cfio.dump(base_assembly(), chiplet)
-    proc = subprocess.run(
-        [sys.executable, str(SCRIPT), "--chiplet", str(chiplet),
-         "--out-dir", str(tmp_path / "out")],
-        capture_output=True, text=True,
-    )
+    assembly = base_assembly()
+    chiplet2dbx.cfio.dump(assembly, chiplet)
+    args = [sys.executable, str(SCRIPT), "--chiplet", str(chiplet),
+            "--out-dir", str(tmp_path / "out")]
+    for ref, box in centred(assembly).items():
+        args += ["--contract", "%s=%s" % (ref, write_box_contract(
+            tmp_path, assembly, ref, box))]
+    proc = subprocess.run(args, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / "out" / "unit_demo.3dbx").read_text() \
+        == chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv",
+                                   die_boxes=centred(assembly))
     out = tmp_path / "out"
     for name in ("unit_demo.3dbv", "unit_demo.3dbx",
                  "techa.lef", "techb.lef"):
@@ -1246,7 +1305,201 @@ def test_cli_views_roundtrip(tmp_path):
         % ref for ref in ("U1", "U2")]
     proc = subprocess.run(args[:-2], capture_output=True, text=True)
     assert proc.returncode == 1
-    assert "unpaired: U2" in proc.stderr
+    assert "without one: U2" in proc.stderr
+
+
+# ------------------------------------------------------- gds_origin anchor
+
+#: D1 of base_assembly (300 x 200) with its GDS origin off the outline's
+#: centre: the outline centre sits at (100, 70) in the die's own frame.
+OFF_BOX = [-50.0, -30.0, 250.0, 170.0]
+
+
+def _turn(x, y, quarter):
+    for _ in range(quarter // 90):
+        x, y = -y, x
+    return x, y
+
+
+def _placed(loc, orient, width, height, u, v):
+    """Where the target puts def-local (u, v) of a def placed at ``loc``
+    with ``orient``: MZ mirrors z only, Rq turns counter-clockwise, and the
+    turned footprint's lower-left corner is ``loc``."""
+    quarter = {"R0": 0, "R90": 90, "R180": 180, "R270": 270}[
+        orient.split("_")[-1] if orient != "MZ" else "R0"]
+    tu, tv = _turn(u, v, quarter)
+    corners = [_turn(cx, cy, quarter) for cx in (0.0, width) for cy in (0.0, height)]
+    return (loc[0] + tu - min(c[0] for c in corners),
+            loc[1] + tv - min(c[1] for c in corners))
+
+
+@pytest.mark.parametrize("quarter", [0, 90, 180, 270])
+@pytest.mark.parametrize("orientation", ["face_up", "flip_chip"])
+def test_an_off_centre_die_is_placed_by_its_gds_origin(orientation, quarter):
+    assembly = bump_assembly()
+    die = assembly["components"][1]
+    die["orientation"] = orientation
+    die["rotation"] = {"z": float(quarter)}
+    boxes = dict(centred(assembly), D1=OFF_BOX)
+    pins = [{"name": "ORIGIN", "x_um": 0.0, "y_um": 0.0},
+            {"name": "FAR", "x_um": 240.0, "y_um": 160.0}]
+    model = chiplet2dbx._build_model(assembly, {"D1": pins}, None, boxes)
+    inst = next(i for i in model["instances"] if i["name"] == "D1")
+    entry = model["defs"][inst["reference"]]
+    pos = (die["position"]["x"], die["position"]["y"])
+    flipped = orientation == "flip_chip"
+    for row, pin in zip(entry["bump"]["rows"], pins):
+        got = _placed(inst["loc"], inst["orient"], entry["width"],
+                      entry["height"], row["x"], row["y"])
+        px = -pin["x_um"] if flipped else pin["x_um"]
+        want = _turn(px, pin["y_um"], quarter)
+        assert got == pytest.approx((pos[0] + want[0], pos[1] + want[1])), \
+            (pin["name"], inst["orient"])
+
+
+def test_a_centred_box_keeps_the_origin_at_the_outline_centre():
+    assembly = base_assembly()
+    die = assembly["components"][1]
+    inst = chiplet2dbx._build_model(assembly, None, None, centred(assembly)
+                                    )["instances"][1]
+    assert inst["loc"] == (die["position"]["x"] - 150.0,
+                           die["position"]["y"] - 100.0)
+
+
+def test_a_corner_origin_die_is_placed_from_its_corner():
+    """Every adk-examples die contract is corner-origin, [0, 0, w, h]: the
+    .chiplet position is the outline's lower-left corner, not its centre."""
+    assembly = base_assembly()
+    die = assembly["components"][1]
+    die["orientation"] = "face_up"
+    boxes = dict(centred(assembly), D1=[0.0, 0.0, 300.0, 200.0])
+    inst = chiplet2dbx._build_model(assembly, None, None, boxes)["instances"][1]
+    assert inst["loc"] == (die["position"]["x"], die["position"]["y"])
+
+
+def test_a_gds_origin_die_without_a_box_is_refused():
+    assembly = base_assembly()
+    boxes = centred(assembly)
+    del boxes["D2"]
+    with pytest.raises(ExportError, match=r"die 'D2' declares anchor gds_origin"
+                       r".*--contract D2=DIR"):
+        chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv", die_boxes=boxes)
+
+
+@pytest.mark.parametrize("box, what", [
+    ([-150.0, -100.0, 150.002, 100.0], r"dimensions.width is 300 um and its "
+                                        r"bbox spans 300.002 um"),
+    ([-150.0, -100.0, 150.0, 90.0], r"dimensions.height is 200 um and its "
+                                     r"bbox spans 190 um"),
+])
+def test_a_box_that_is_not_the_declared_outline_is_refused(box, what):
+    assembly = base_assembly()
+    boxes = dict(centred(assembly), D1=box)
+    with pytest.raises(ExportError, match=what):
+        chiplet2dbx._build_model(assembly, None, None, boxes)
+
+
+def test_a_box_within_the_tolerance_is_accepted():
+    assembly = base_assembly()
+    boxes = dict(centred(assembly), D1=[-150.0, -100.0, 150.001, 100.0])
+    chiplet2dbx._build_model(assembly, None, None, boxes)
+
+
+def _cli(tmp_path, assembly, contracts, pins=None):
+    chiplet = tmp_path / "unit_demo.chiplet"
+    chiplet2dbx.cfio.dump(assembly, chiplet)
+    args = [sys.executable, str(SCRIPT), "--chiplet", str(chiplet),
+            "--out-dir", str(tmp_path / "out")]
+    for ref, contract in contracts.items():
+        args += ["--contract", "%s=%s" % (ref, contract)]
+    for ref, path in (pins or {}).items():
+        args += ["--pins", "%s=%s" % (ref, path)]
+    return subprocess.run(args, capture_output=True, text=True)
+
+
+def test_cli_without_a_contract_names_the_remedy(tmp_path):
+    assembly = base_assembly()
+    contract = write_box_contract(tmp_path, assembly, "D1",
+                                  centred(assembly)["D1"])
+    proc = _cli(tmp_path, assembly, {"D1": contract})
+    assert proc.returncode == 1
+    assert "--contract D2=DIR" in proc.stderr
+
+
+def test_cli_places_an_off_centre_die_from_its_contract(tmp_path):
+    assembly = base_assembly()
+    contracts = {ref: write_box_contract(tmp_path, assembly, ref, box)
+                 for ref, box in dict(centred(assembly), D1=OFF_BOX).items()}
+    proc = _cli(tmp_path, assembly, contracts)
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / "out" / "unit_demo.3dbx").read_text() \
+        == chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv",
+                                   die_boxes=dict(centred(assembly), D1=OFF_BOX))
+
+
+@pytest.mark.parametrize("field, value, message", [
+    ("top_cell", "OTHER", "die 'D1' names top cell 'DIE_A', and the die contract"),
+    ("frame", "die_bbox_corner", "states frame 'die_bbox_corner'"),
+    ("layout_sha256", "1" * 64, "is not the bytes the die contract"),
+])
+def test_cli_refuses_a_contract_of_another_die(tmp_path, field, value, message):
+    assembly = base_assembly()
+    boxes = centred(assembly)
+    contracts = {"D1": write_box_contract(tmp_path, assembly, "D1", boxes["D1"],
+                                          **{field: value}),
+                 "D2": write_box_contract(tmp_path, assembly, "D2", boxes["D2"])}
+    proc = _cli(tmp_path, assembly, contracts)
+    assert proc.returncode == 1
+    assert message in proc.stderr
+
+
+def test_cli_refuses_a_pin_list_the_contract_does_not_bind(tmp_path):
+    assembly = bump_assembly()
+    pins = tmp_path / "d1.pins.json"
+    pins.write_text(json.dumps({"dbu_um": 0.001, "pins": [
+        {"name": "VDD", "center_x_dbu": 0, "center_y_dbu": 60000}]}))
+    boxes = centred(assembly)
+    contracts = {"D1": write_box_contract(tmp_path, assembly, "D1", boxes["D1"]),
+                 "D2": write_box_contract(tmp_path, assembly, "D2", boxes["D2"])}
+    proc = _cli(tmp_path, assembly, contracts, {"D1": pins})
+    assert proc.returncode == 1
+    assert "is not the one the die contract" in proc.stderr
+
+
+def test_cli_lists_the_layouts_it_would_read(tmp_path, monkeypatch):
+    # What a launcher mounts before the export: each --contract die's layout,
+    # resolved as the .chiplet names it, with nothing read or written; the
+    # files do not even have to exist yet.
+    monkeypatch.setenv("DIE_ROOT", str(tmp_path / "dies"))
+    assembly = base_assembly()
+    assembly["components"][1]["layout"] = "../elsewhere/d1.gds"
+    assembly["components"][2]["layout"] = "${DIE_ROOT}/d2.gds"
+    chiplet = tmp_path / "asm" / "unit_demo.chiplet"
+    chiplet.parent.mkdir()
+    chiplet2dbx.cfio.dump(assembly, chiplet)
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--chiplet", str(chiplet),
+         "--out-dir", str(tmp_path / "out"), "--list-layouts",
+         "--contract", "D2=absent/d2", "--contract", "D1=absent/d1",
+         "--pins", "D1=absent.pins.json"],
+        capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.splitlines() == [str(tmp_path / "elsewhere" / "d1.gds"),
+                                        str(tmp_path / "dies" / "d2.gds")]
+    assert not (tmp_path / "out").exists()
+
+
+def test_cli_lists_no_layout_for_an_unknown_ref(tmp_path):
+    assembly = base_assembly()
+    chiplet = tmp_path / "unit_demo.chiplet"
+    chiplet2dbx.cfio.dump(assembly, chiplet)
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--chiplet", str(chiplet),
+         "--list-layouts", "--contract", "U9=dir"],
+        capture_output=True, text=True)
+    assert proc.returncode == 1
+    assert "--contract names U9, which the .chiplet has no die for" \
+        in proc.stderr
 
 
 def test_cli_reports_errors(tmp_path):
@@ -1783,8 +2036,20 @@ def _assert_clean(output: str, allowed=()) -> None:
 
 @needs_openroad_image
 def test_live_check_3dblox_synthetic(tmp_path):
-    dbv, dbx, _ = chiplet2dbx.export_3dblox(base_assembly(), tmp_path)
+    dbv, dbx, _ = chiplet2dbx.export_3dblox(base_assembly(), tmp_path, die_boxes=centred(base_assembly()))
     _assert_clean(_run_openroad(tmp_path, dbx.name))
+
+
+#: Metal_Test.gds's top-cell bbox, the die of both demo dies: its GDS origin
+#: is not the outline's centre (31.202 um off in y).
+METAL_TEST_BOX = [-389.0, -1298.798, 389.0, 1361.202]
+
+
+def _demo_boxes(assembly):
+    dies = [c for c in assembly["components"] if c["type"] == "die"]
+    if any(c.get("top_cell") != "Metal_Test" for c in dies):
+        pytest.skip("the demo's dies are not Metal_Test; no box for them")
+    return {str(c["id"]): METAL_TEST_BOX for c in dies}
 
 
 def _demo_chiplet_path():
@@ -1801,14 +2066,15 @@ def test_live_check_3dblox_wire_bond_demo(tmp_path):
     if demo is None:
         pytest.skip("wire-bond demo .chiplet not available")
     assembly = chiplet2dbx.load_chiplet(demo)
-    dbv, dbx, _ = chiplet2dbx.export_3dblox(assembly, tmp_path)
+    dbv, dbx, _ = chiplet2dbx.export_3dblox(assembly, tmp_path,
+                                            die_boxes=_demo_boxes(assembly))
     _assert_clean(_run_openroad(tmp_path, dbx.name))
 
 
 @needs_openroad_image
 def test_live_linter_sees_geometry(tmp_path):
     """Negative control: a 1 um z error must trip the connection check."""
-    dbv, dbx, _ = chiplet2dbx.export_3dblox(base_assembly(), tmp_path)
+    dbv, dbx, _ = chiplet2dbx.export_3dblox(base_assembly(), tmp_path, die_boxes=centred(base_assembly()))
     text = dbx.read_text().replace("z: 35\n", "z: 36\n")
     assert "z: 36" in text
     dbx.write_text(text)
@@ -1817,10 +2083,11 @@ def test_live_linter_sees_geometry(tmp_path):
     assert "ODB-0273" in output, output
 
 
-def _export_with_bumps(assembly, tmp_path, die_pins):
+def _export_with_bumps(assembly, tmp_path, die_pins, die_boxes=None):
     try:
-        return chiplet2dbx.export_3dblox(assembly, tmp_path,
-                                         die_pins=die_pins)
+        return chiplet2dbx.export_3dblox(
+            assembly, tmp_path, die_pins=die_pins,
+            die_boxes=die_boxes or centred(assembly))
     except ExportError as exc:
         if "bump LEF generator" in str(exc):
             pytest.skip("interconnect_pdk sibling checkout not available")
@@ -1873,7 +2140,7 @@ def test_unknown_manifest_method_fails_loudly(tmp_path):
         pytest.skip("interconnect_pdk sibling checkout not available")
     with pytest.raises(ExportError, match="not in the interconnect PDK"):
         chiplet2dbx.export_3dblox(bump_assembly(), tmp_path,
-                                  die_pins={"D1": d1_pins()})
+                                  die_pins={"D1": d1_pins()}, die_boxes=centred(bump_assembly()))
 
 
 @needs_openroad_image
@@ -1887,7 +2154,7 @@ def test_live_check_3dblox_demo_with_bumps(tmp_path):
         pytest.skip("wire-bond demo .chiplet or pins.json not available")
     assembly = chiplet2dbx.load_chiplet(demo)
     dbv, dbx, _ = _export_with_bumps(
-        assembly, tmp_path, {"U1": pins, "U2": pins})
+        assembly, tmp_path, {"U1": pins, "U2": pins}, _demo_boxes(assembly))
     _assert_clean(_run_openroad(tmp_path, dbx.name))
 
 
@@ -2000,14 +2267,14 @@ def test_mount_plane_conformance_case(case):
     kind, refusal = _REFUSAL.get(case["file"], (expect["outcome"], None))
     if kind == "not yet":
         with pytest.raises(ExportError, match=refusal):
-            chiplet2dbx.render_3dbx(assembly, "case.3dbv")
+            chiplet2dbx.render_3dbx(assembly, "case.3dbv", die_boxes=centred(assembly))
         pytest.xfail("the exporter does not compute a die's z yet")
     if expect["outcome"] == "refuse":
         assert refusal, "%s is a refuse case; name its refusal in _REFUSAL" % case["file"]
         with pytest.raises(ExportError, match=refusal):
-            chiplet2dbx.render_3dbx(assembly, "case.3dbv")
+            chiplet2dbx.render_3dbx(assembly, "case.3dbv", die_boxes=centred(assembly))
         return
-    placed = _stack_z(chiplet2dbx.render_3dbx(assembly, "case.3dbv"))
+    placed = _stack_z(chiplet2dbx.render_3dbx(assembly, "case.3dbv", die_boxes=centred(assembly)))
     interposer = {str(c["id"]) for c in assembly["components"]
                   if c["type"] == "interposer"}
     assert set(placed) == interposer | set(expect["dies"])
