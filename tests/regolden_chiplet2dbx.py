@@ -16,23 +16,26 @@ sys.path.insert(0, str(TESTS_DIR.parent / "openroad"))
 
 import chiplet2dbx  # noqa: E402
 from test_chiplet2dbx import (  # noqa: E402
-    GOLDEN_DIR, base_assembly, bump_assembly, d1_pins, export_views_fixture)
+    GOLDEN_DIR, base_assembly, bump_assembly, centred, d1_pins, export_views_fixture)
 
 
 def main() -> int:
     GOLDEN_DIR.mkdir(exist_ok=True)
     assembly = base_assembly()
+    boxes = centred(assembly)
+    bumps = bump_assembly()
+    bump_boxes = centred(bumps)
     pins = {"D1": d1_pins()}
     targets = {
-        "chiplet2dbx_unit_demo.3dbv.golden": chiplet2dbx.render_3dbv(assembly),
+        "chiplet2dbx_unit_demo.3dbv.golden": chiplet2dbx.render_3dbv(assembly, die_boxes=boxes),
         "chiplet2dbx_unit_demo.3dbx.golden":
-            chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv"),
+            chiplet2dbx.render_3dbx(assembly, "unit_demo.3dbv", die_boxes=boxes),
         "chiplet2dbx_tech.lef.golden": chiplet2dbx.render_tech_lef(1000),
         "chiplet2dbx_unit_demo_bumps.3dbv.golden":
-            chiplet2dbx.render_3dbv(bump_assembly(), die_pins=pins),
+            chiplet2dbx.render_3dbv(bumps, die_pins=pins, die_boxes=bump_boxes),
         "chiplet2dbx_unit_demo.bmap.golden":
-            chiplet2dbx.render_bmap(bump_assembly(), "DIE_A__bump25",
-                                    die_pins=pins),
+            chiplet2dbx.render_bmap(bumps, "DIE_A__bump25", die_pins=pins,
+                                    die_boxes=bump_boxes),
         "chiplet2dbx_tech_route.lef.golden":
             chiplet2dbx.render_tech_lef(1000, "BUMP_ATTACH"),
     }
