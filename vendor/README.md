@@ -6,9 +6,9 @@ Byte-identical copy of the Apache-2.0 reference `.chiplet` reader/writer from
 the chiplet-spec repository (`reference/python/chiplet_format_io/__init__.py`).
 Same vendoring pattern the other ecosystem consumers use.
 
-Currently vendored: reader 1.26.0, from chiplet-spec dev
-at `74ac8c2` (`vendor/chiplet_format_io/__init__.py` sha256 `14640062...`),
-a public dev commit that carries reader release 1.26.0.
+Currently vendored: reader 1.27.0, from chiplet-spec dev
+at `c2f1f3a` (`vendor/chiplet_format_io/__init__.py` sha256 `aa23f163...`),
+a public dev commit that carries reader release 1.27.0.
 
 Do not edit here. To update: copy the file from chiplet-spec verbatim, move the
 pin above with it, and verify the checksum matches. `tests/test_chiplet2dbx.py`
